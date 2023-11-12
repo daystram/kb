@@ -1,0 +1,10 @@
+- matrix scanner (fixed: 1000 Hz)
+  - scan
+  - > bitmap_channel
+- stream processor (inherit)
+  - debounce
+  - led
+  - map
+  - > keys_channel
+- hid reporter (fixed: 1000 Hz)
+  - report
