@@ -1,0 +1,50 @@
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+# runner = "probe-run --chip RP2040"
+runner = "elf2uf2-rs -d"
+rustflags = [
+    "-C",
+    "linker=flip-link",
+
+    # This is needed if your flash or ram addresses are not aligned to 0x10000 in memory.x
+    # See https://github.com/rust-embedded/cortex-m-quickstart/pull/95
+    "-C",
+    "link-arg=--nmagic",
+    "-C",
+    "link-arg=-Tlink.x",
+    "-C",
+    "link-arg=-Tdefmt.x",
+
+    "-C",
+    "inline-threshold=5",
+    "-C",
+    "no-vectorize-loops",
+
+    # if you run into problems with LLD switch to the GNU linker by commenting out
+    # this line
+    # "-C", "linker=arm-none-eabi-ld",
+
+    # if you need to link to pre-compiled C libraries provided by a C toolchain
+    # use GCC as the linker by commenting out both lines above and then
+    # uncommenting the three lines below
+    # "-C", "linker=arm-none-eabi-gcc",
+    # "-C", "link-arg=-Wl,-Tlink.x",
+    # "-C", "link-arg=-nostartfiles",
+]
+
+[build]
+target = "thumbv6m-none-eabi"
+
+[env]
+DEFMT_LOG = "trace"
+
+[profile.dev]
+opt-level = 1
+codegen-units = 16
+debug = true
+lto = false
+
+[profile.release]
+opt-level = "s"   # optimize for size
+codegen-units = 1 # better optimizations
+debug = true      # symbols are nice and they don't increase the size on Flash
+lto = true        # better optimzations

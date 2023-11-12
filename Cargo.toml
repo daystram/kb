@@ -1,0 +1,27 @@
+[package]
+name = "kb"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+defmt = "0.3"
+defmt-rtt = "0.4.0"
+panic-probe = { version = "0.3.1", features = ["print-defmt"] }
+
+cortex-m = { version = "0.7.6" }
+embedded-alloc = "0.5.0"
+embedded-hal = { version = "0.2.7", features = ["unproven"] }
+rp2040-boot2 = "0.3.0"
+rp2040-hal = { version = "0.9.0", features = ["rt", "critical-section-impl"] }
+
+rtic = { version = "2.0.0", git = "https://github.com/rtic-rs/rtic", features = [
+    "thumbv6-backend",
+] }
+rtic-monotonics = { version = "1.0.0", git = "https://github.com/rtic-rs/rtic", features = [
+    "rp2040",
+] }
+rtic-sync = "1.0.2"
+
+usb-device = "0.2.9"
+usbd-human-interface-device = { version = "0.4.3", features = ["defmt"] }
+frunk = { version = "0.4.2", default-features = false }
