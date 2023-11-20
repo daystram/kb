@@ -1,34 +1,43 @@
 extern crate alloc;
 use alloc::boxed::Box;
-use core::ops::{Deref, DerefMut};
+use defmt::Format;
 
 use embedded_hal::digital::v2::{InputPin, OutputPin};
-use rp2040_hal::gpio::{self};
+use rp2040_hal::gpio;
 
 use crate::util::halt;
 
-#[derive(Clone, Copy)]
-pub struct Bitmap<const ROW_COUNT: usize, const COL_COUNT: usize>(
-    pub [[bool; COL_COUNT]; ROW_COUNT],
-);
+#[derive(Clone, Copy, Debug, Format, PartialEq)]
+pub enum Edge {
+    None,
+    Rising,
+    Falling,
+}
 
-impl<const ROW_COUNT: usize, const COL_COUNT: usize> Deref for Bitmap<ROW_COUNT, COL_COUNT> {
-    type Target = [[bool; COL_COUNT]; ROW_COUNT];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+impl From<(bool, bool)> for Edge {
+    fn from((from, to): (bool, bool)) -> Self {
+        if !from && to {
+            Edge::Rising
+        } else if from && !to {
+            Edge::Falling
+        } else {
+            Edge::None
+        }
     }
 }
 
-impl<const ROW_COUNT: usize, const COL_COUNT: usize> DerefMut for Bitmap<ROW_COUNT, COL_COUNT> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
+#[derive(Clone, Copy, Debug, Format)]
+pub struct Bitmap<const ROW_COUNT: usize, const COL_COUNT: usize> {
+    pub sample_time_ticks: u64,
+    pub matrix: [[(Edge, bool); COL_COUNT]; ROW_COUNT],
 }
 
 impl<const ROW_COUNT: usize, const COL_COUNT: usize> Default for Bitmap<ROW_COUNT, COL_COUNT> {
     fn default() -> Self {
-        Bitmap([[false; COL_COUNT]; ROW_COUNT])
+        Bitmap {
+            sample_time_ticks: 0,
+            matrix: [[(Edge::None, false); COL_COUNT]; ROW_COUNT],
+        }
     }
 }
 
@@ -39,6 +48,7 @@ pub trait Scanner<const ROW_COUNT: usize, const COL_COUNT: usize> {
 pub struct BasicVerticalSwitchMatrix<const ROW_COUNT: usize, const COL_COUNT: usize> {
     pub rows: [Box<dyn InputPin<Error = gpio::Error>>; ROW_COUNT],
     pub cols: [Box<dyn OutputPin<Error = gpio::Error>>; COL_COUNT],
+    previous_bitmap: Bitmap<{ ROW_COUNT }, { COL_COUNT }>,
 }
 
 impl<const ROW_COUNT: usize, const COL_COUNT: usize>
@@ -48,7 +58,11 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize>
         rows: [Box<dyn InputPin<Error = gpio::Error>>; ROW_COUNT],
         cols: [Box<dyn OutputPin<Error = gpio::Error>>; COL_COUNT],
     ) -> Self {
-        return BasicVerticalSwitchMatrix { rows, cols };
+        return BasicVerticalSwitchMatrix {
+            rows,
+            cols,
+            previous_bitmap: Bitmap::default(),
+        };
     }
 }
 
@@ -60,11 +74,16 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, COL_COUN
         for (j, col) in self.cols.iter_mut().enumerate() {
             col.set_high().unwrap();
             for (i, row) in self.rows.iter().enumerate() {
-                bitmap[i][j] = row.is_high().unwrap();
+                let pressed = row.is_high().unwrap();
+                bitmap.matrix[i][j] = (
+                    Edge::from((self.previous_bitmap.matrix[i][j].1, pressed)),
+                    pressed,
+                )
             }
             col.set_low().unwrap();
             halt(1).await;
         }
+        self.previous_bitmap = bitmap;
         return bitmap;
     }
 }
@@ -72,6 +91,7 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, COL_COUN
 pub struct BasicHorizontalSwitchMatrix<const ROW_COUNT: usize, const COL_COUNT: usize> {
     pub rows: [Box<dyn OutputPin<Error = gpio::Error>>; ROW_COUNT],
     pub cols: [Box<dyn InputPin<Error = gpio::Error>>; COL_COUNT],
+    previous_bitmap: Bitmap<{ ROW_COUNT }, { COL_COUNT }>,
 }
 
 impl<const ROW_COUNT: usize, const COL_COUNT: usize>
@@ -81,7 +101,11 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize>
         rows: [Box<dyn OutputPin<Error = gpio::Error>>; ROW_COUNT],
         cols: [Box<dyn InputPin<Error = gpio::Error>>; COL_COUNT],
     ) -> Self {
-        return BasicHorizontalSwitchMatrix { rows, cols };
+        return BasicHorizontalSwitchMatrix {
+            rows,
+            cols,
+            previous_bitmap: Bitmap::default(),
+        };
     }
 }
 
@@ -93,11 +117,16 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, COL_COUN
         for (i, row) in self.rows.iter_mut().enumerate() {
             row.set_high().unwrap();
             for (j, col) in self.cols.iter().enumerate() {
-                bitmap[i][j] = col.is_high().unwrap();
+                let pressed = col.is_high().unwrap();
+                bitmap.matrix[i][j] = (
+                    Edge::from((self.previous_bitmap.matrix[i][j].1, pressed)),
+                    pressed,
+                )
             }
             row.set_low().unwrap();
             halt(1).await;
         }
+        self.previous_bitmap = bitmap;
         return bitmap;
     }
 }

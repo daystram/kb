@@ -1,3 +1,5 @@
+use defmt::Format;
+
 use crate::{
     key::{
         Action::{Key as K, LayerModifier as LM, Pass as ___},
@@ -163,7 +165,7 @@ pub const KEY_MAP: Mapping<{ ROW_COUNT }, { COL_COUNT }, { LAYER_COUNT }, Layer>
 ]);
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, PartialEq, PartialOrd, Format)]
 pub enum Layer {
     Base,
     Function1,

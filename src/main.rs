@@ -5,7 +5,6 @@
 #![feature(error_in_core)]
 #![feature(return_position_impl_trait_in_trait)]
 mod config;
-mod hid;
 mod key;
 mod matrix;
 mod stream;
@@ -17,7 +16,7 @@ mod util;
 )]
 mod kb {
     extern crate alloc;
-    use alloc::boxed::Box;
+    use alloc::{boxed::Box, vec::Vec};
     #[global_allocator]
     static HEAP: embedded_alloc::Heap = embedded_alloc::Heap::empty();
 
@@ -46,17 +45,17 @@ mod kb {
     };
 
     use crate::{
-        config::{self, KEY_MAP},
-        hid::Keys,
+        config::{self, Layer, KEY_MAP},
+        key::{Action, Key},
         matrix::{BasicVerticalSwitchMatrix, Bitmap, Scanner},
-        stream::{BitmapProcessor, KeysMapper, KeysProcessor, Mapper},
+        stream::{BitmapProcessor, Event, EventsMapper, EventsProcessor},
     };
 
     const XOSC_CRYSTAL_FREQ: u32 = 12_000_000;
     const MAX_PWM_POWER: u16 = 0x6000; // max: 0x8000
 
-    const BITMAP_CHANNEL_BUFFER_COUNT: usize = 1;
-    const KEYS_CHANNEL_BUFFER_COUNT: usize = 1;
+    const BITMAP_CHANNEL_BUFFER_SIZE: usize = 1;
+    const KEYS_CHANNEL_BUFFER_SIZE: usize = 1;
 
     const MATRIX_SCANNER_TARGET_POLL_FREQ: u64 = 1000;
     const HID_REPORTER_TARGET_POLL_FREQ: u64 = 1000;
@@ -175,6 +174,11 @@ mod kb {
         debug!("spawn heartbeat");
         heartbeat::spawn(pwm_channel).ok();
 
+        // Init channels
+        let (bitmap_sender, bitmap_receiver) = rtic_sync::make_channel!(Bitmap<{config::ROW_COUNT}, {config::COL_COUNT}>, BITMAP_CHANNEL_BUFFER_SIZE);
+        let (keys_sender, keys_receiver) =
+            rtic_sync::make_channel!(Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE);
+
         // Init switch matrix
         #[rustfmt::skip]
         let matrix = BasicVerticalSwitchMatrix::new(
@@ -203,11 +207,6 @@ mod kb {
                 Box::new(pins.gpio14.into_push_pull_output_in_state(gpio::PinState::Low)),
             ],
         );
-
-        // Init channels
-        let (bitmap_sender, bitmap_receiver) = rtic_sync::make_channel!(Bitmap<{config::ROW_COUNT}, {config::COL_COUNT}>, BITMAP_CHANNEL_BUFFER_COUNT);
-        let (keys_sender, keys_receiver) =
-            rtic_sync::make_channel!(Keys, KEYS_CHANNEL_BUFFER_COUNT);
 
         // Init matrix scanner
         debug!("spawn matrix_scanner");
@@ -252,7 +251,7 @@ mod kb {
         mut bitmap_sender: Sender<
             'static,
             Bitmap<{ config::ROW_COUNT }, { config::COL_COUNT }>,
-            BITMAP_CHANNEL_BUFFER_COUNT,
+            BITMAP_CHANNEL_BUFFER_SIZE,
         >,
     ) {
         info!("matrix_scanner()");
@@ -286,17 +285,16 @@ mod kb {
         mut bitmap_receiver: Receiver<
             'static,
             Bitmap<{ config::ROW_COUNT }, { config::COL_COUNT }>,
-            BITMAP_CHANNEL_BUFFER_COUNT,
+            BITMAP_CHANNEL_BUFFER_SIZE,
         >,
-        mut keys_sender: Sender<'static, Keys, KEYS_CHANNEL_BUFFER_COUNT>,
+        mut keys_sender: Sender<'static, Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE>,
     ) {
         info!("stream_processor()");
         let bitmap_processors: &mut [&mut dyn BitmapProcessor<
             { config::ROW_COUNT },
             { config::COL_COUNT },
         >] = &mut [];
-        let mapper = KeysMapper::new(KEY_MAP);
-        let keys_processors: &mut [&mut dyn KeysProcessor] = &mut [];
+        let mut mapper = EventsMapper::new(KEY_MAP);
 
         while let Ok(mut bitmap) = bitmap_receiver.recv().await {
             match bitmap_processors
@@ -307,25 +305,28 @@ mod kb {
                 _ => {}
             }
 
-            let mut keys = Keys::with_capacity(10);
-            mapper.map(&bitmap, &mut keys);
+            let mut events = Vec::<Event<Layer>>::with_capacity(10);
+            mapper.map(&bitmap, &mut events);
 
-            match keys_processors
-                .iter_mut()
-                .try_for_each(|p| p.process(&mut keys))
-            {
-                Err(_) => continue,
-                _ => {}
-            }
+            keys_sender
+                .try_send(
+                    events
+                        .into_iter()
+                        .filter_map(|e| match e.action {
+                            Action::Key(k) => Some(k.into()),
+                            _ => None,
+                        })
+                        .collect(),
+                )
+                .ok(); // drop data if buffer is full
 
-            keys_sender.try_send(keys).ok(); // drop data if buffer is full
         }
     }
 
     #[task(shared=[usb_keyboard], priority = 1)]
     async fn hid_reporter(
         mut ctx: hid_reporter::Context,
-        mut keys_receiver: Receiver<'static, Keys, KEYS_CHANNEL_BUFFER_COUNT>,
+        mut keys_receiver: Receiver<'static, Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE>,
     ) {
         info!("hid_reporter()");
         while let Ok(keys) = keys_receiver.recv().await {
@@ -334,16 +335,16 @@ mod kb {
                 debug!("keys: {:?}", keys.as_slice());
             }
 
-            ctx.shared
-                .usb_keyboard
-                .lock(|k| match k.device().write_report(keys) {
+            ctx.shared.usb_keyboard.lock(|k| {
+                match k.device().write_report(keys.into_iter().map(|k| k.into())) {
                     Ok(_) => {}
                     Err(UsbHidError::WouldBlock) => {}
                     Err(UsbHidError::Duplicate) => {}
                     Err(e) => {
                         core::panic!("Failed to write keyboard report: {:?}", e);
                     }
-                });
+                }
+            });
 
             Timer::delay_until(start_time + HID_REPORTER_TARGET_POLL_PERIOD.micros()).await;
         }

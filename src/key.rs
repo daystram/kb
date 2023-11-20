@@ -1,7 +1,8 @@
+use defmt::Format;
 use usbd_human_interface_device::page::Keyboard;
 
 #[allow(dead_code)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Format)]
 pub enum Action<L: LayerIndex> {
     Pass,
     None,
@@ -28,7 +29,7 @@ impl<L: LayerIndex> Default for Action<L> {
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Format, PartialEq)]
 pub enum Key {
     Escape,
     F1,
