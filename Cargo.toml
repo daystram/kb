@@ -25,3 +25,5 @@ rtic-sync = "1.0.2"
 usb-device = "0.2.9"
 usbd-human-interface-device = { version = "0.4.3", features = ["defmt"] }
 frunk = { version = "0.4.2", default-features = false }
+smart-leds = "0.3.0"
+ws2812-pio = "0.7.0"
