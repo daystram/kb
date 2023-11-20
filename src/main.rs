@@ -5,24 +5,25 @@
 #![feature(error_in_core)]
 #![feature(return_position_impl_trait_in_trait)]
 mod config;
-mod hid;
 mod key;
 mod matrix;
 mod stream;
 mod util;
 
+extern crate rp2040_hal as hal;
+use {defmt_rtt as _, panic_probe as _};
+
 #[rtic::app(
-    device = rp2040_hal::pac,
+    device = hal::pac,
     dispatchers = [TIMER_IRQ_1, TIMER_IRQ_2]
 )]
 mod kb {
     extern crate alloc;
-    use alloc::boxed::Box;
+    use alloc::{boxed::Box, vec::Vec};
     #[global_allocator]
     static HEAP: embedded_alloc::Heap = embedded_alloc::Heap::empty();
 
     use defmt::{debug, info};
-    use {defmt_rtt as _, panic_probe as _};
 
     // The linker will place this boot block at the start of our program image.
     // We need this to help the ROM bootloader get our code up and running.
@@ -31,7 +32,7 @@ mod kb {
     pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
 
     use embedded_hal::PwmPin;
-    use rp2040_hal::{clocks::init_clocks_and_plls, gpio, pac, pwm, sio, usb, Sio, Watchdog};
+    use hal::{clocks::init_clocks_and_plls, gpio, pac, prelude::*, pwm, sio, usb, Sio, Watchdog};
     use rtic_monotonics::{rp2040::*, Monotonic};
     use rtic_sync::channel::{Receiver, Sender};
     use usb_device::{
@@ -46,24 +47,29 @@ mod kb {
     };
 
     use crate::{
-        config::{self, KEY_MAP},
-        hid::Keys,
+        config::{self, Layer, KEY_MAP},
+        key::{Action, Key},
         matrix::{BasicVerticalSwitchMatrix, Bitmap, Scanner},
-        stream::{BitmapProcessor, KeysMapper, KeysProcessor, Mapper},
+        stream::{BitmapProcessor, Event, EventsMapper, EventsProcessor},
     };
 
     const XOSC_CRYSTAL_FREQ: u32 = 12_000_000;
     const MAX_PWM_POWER: u16 = 0x6000; // max: 0x8000
 
-    const BITMAP_CHANNEL_BUFFER_COUNT: usize = 1;
-    const KEYS_CHANNEL_BUFFER_COUNT: usize = 1;
+    const BITMAP_CHANNEL_BUFFER_SIZE: usize = 1;
+    const KEYS_CHANNEL_BUFFER_SIZE: usize = 1;
 
     const MATRIX_SCANNER_TARGET_POLL_FREQ: u64 = 1000;
     const HID_REPORTER_TARGET_POLL_FREQ: u64 = 1000;
-    const MATRIX_SCANNER_TARGET_POLL_PERIOD: u64 = 1_000_000u64 / MATRIX_SCANNER_TARGET_POLL_FREQ;
-    const HID_REPORTER_TARGET_POLL_PERIOD: u64 = 1_000_000u64 / HID_REPORTER_TARGET_POLL_FREQ;
+    const MATRIX_SCANNER_TARGET_POLL_PERIOD_MICROS: u64 =
+        1_000_000u64 / MATRIX_SCANNER_TARGET_POLL_FREQ;
+    const HID_REPORTER_TARGET_POLL_PERIOD_MICROS: u64 =
+        1_000_000u64 / HID_REPORTER_TARGET_POLL_FREQ;
 
-    const DEBUG_LOG_SCANNER_TIMING: bool = true;
+    const DEBUG_LOG_MATRIX_SCANNER_ENABLE_TIMING: bool = true;
+    const DEBUG_LOG_MATRIX_SCANNER_INTERVAL: u64 = 50;
+    const DEBUG_LOG_STREAM_PROCESSOR_ENABLE_TIMING: bool = true;
+    const DEBUG_LOG_STREAM_PROCESSOR_INTERVAL: u64 = 50;
     const DEBUG_LOG_SENT_KEYS: bool = false;
 
     #[shared]
@@ -175,9 +181,14 @@ mod kb {
         debug!("spawn heartbeat");
         heartbeat::spawn(pwm_channel).ok();
 
+        // Init channels
+        let (bitmap_sender, bitmap_receiver) = rtic_sync::make_channel!(Bitmap<{config::ROW_COUNT}, {config::COL_COUNT}>, BITMAP_CHANNEL_BUFFER_SIZE);
+        let (keys_sender, keys_receiver) =
+            rtic_sync::make_channel!(Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE);
+
         // Init switch matrix
         #[rustfmt::skip]
-        let matrix = BasicVerticalSwitchMatrix::new(
+        let switch_matrix = BasicVerticalSwitchMatrix::new(
             [
                 Box::new(pins.gpio24.into_pull_down_input()),
                 Box::new(pins.gpio23.into_pull_down_input()),
@@ -204,11 +215,6 @@ mod kb {
             ],
         );
 
-        // Init channels
-        let (bitmap_sender, bitmap_receiver) = rtic_sync::make_channel!(Bitmap<{config::ROW_COUNT}, {config::COL_COUNT}>, BITMAP_CHANNEL_BUFFER_COUNT);
-        let (keys_sender, keys_receiver) =
-            rtic_sync::make_channel!(Keys, KEYS_CHANNEL_BUFFER_COUNT);
-
         // Init matrix scanner
         debug!("spawn matrix_scanner");
         matrix_scanner::spawn(bitmap_sender).ok();
@@ -233,7 +239,7 @@ mod kb {
                 usb_device,
                 usb_keyboard,
             },
-            Local { matrix },
+            Local { switch_matrix },
         )
     }
 
@@ -246,37 +252,41 @@ mod kb {
         }
     }
 
-    #[task (local=[matrix], priority = 1)]
+    #[task (local=[switch_matrix], priority = 1)]
     async fn matrix_scanner(
         ctx: matrix_scanner::Context,
         mut bitmap_sender: Sender<
             'static,
             Bitmap<{ config::ROW_COUNT }, { config::COL_COUNT }>,
-            BITMAP_CHANNEL_BUFFER_COUNT,
+            BITMAP_CHANNEL_BUFFER_SIZE,
         >,
     ) {
         info!("matrix_scanner()");
         let mut poll_end_time = Timer::now();
+        let mut n: u64 = 0;
         loop {
             let scan_start_time = Timer::now();
-            let bitmap = ctx.local.matrix.scan().await;
+            let bitmap = ctx.local.switch_matrix.scan().await;
             bitmap_sender.try_send(bitmap).ok(); // drop data if buffer is full
 
-            if DEBUG_LOG_SCANNER_TIMING {
+            if DEBUG_LOG_MATRIX_SCANNER_ENABLE_TIMING && n % DEBUG_LOG_MATRIX_SCANNER_INTERVAL == 0
+            {
                 let scan_end_time = Timer::now();
                 debug!(
-                    "scan: {} us\tpoll: {} us\trate: {} Hz\t budget: {} %",
+                    "[{}] matrix_scanner: {} us\tpoll: {} us\trate: {} Hz\t budget: {} %",
+                    n,
                     (scan_end_time - scan_start_time).to_micros(),
                     (scan_end_time - poll_end_time).to_micros(),
                     1_000_000u64 / (scan_end_time - poll_end_time).to_micros(),
                     (scan_end_time - scan_start_time).to_micros() * 100
-                        / MATRIX_SCANNER_TARGET_POLL_PERIOD
+                        / MATRIX_SCANNER_TARGET_POLL_PERIOD_MICROS
                 );
             }
 
             poll_end_time = Timer::now();
-            Timer::delay_until(scan_start_time + MATRIX_SCANNER_TARGET_POLL_PERIOD.micros()).await;
-            // Timer::delay(target_period_micros.micros()).await;
+            n = n.wrapping_add(1);
+            Timer::delay_until(scan_start_time + MATRIX_SCANNER_TARGET_POLL_PERIOD_MICROS.micros())
+                .await;
         }
     }
 
@@ -286,19 +296,21 @@ mod kb {
         mut bitmap_receiver: Receiver<
             'static,
             Bitmap<{ config::ROW_COUNT }, { config::COL_COUNT }>,
-            BITMAP_CHANNEL_BUFFER_COUNT,
+            BITMAP_CHANNEL_BUFFER_SIZE,
         >,
-        mut keys_sender: Sender<'static, Keys, KEYS_CHANNEL_BUFFER_COUNT>,
+        mut keys_sender: Sender<'static, Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE>,
     ) {
         info!("stream_processor()");
         let bitmap_processors: &mut [&mut dyn BitmapProcessor<
             { config::ROW_COUNT },
             { config::COL_COUNT },
         >] = &mut [];
-        let mapper = KeysMapper::new(KEY_MAP);
-        let keys_processors: &mut [&mut dyn KeysProcessor] = &mut [];
+        let mut mapper = EventsMapper::new(KEY_MAP);
 
+        let mut poll_end_time = Timer::now();
+        let mut n: u64 = 0;
         while let Ok(mut bitmap) = bitmap_receiver.recv().await {
+            let process_start_time = Timer::now();
             match bitmap_processors
                 .iter_mut()
                 .try_for_each(|p| p.process(&mut bitmap))
@@ -307,25 +319,45 @@ mod kb {
                 _ => {}
             }
 
-            let mut keys = Keys::with_capacity(10);
-            mapper.map(&bitmap, &mut keys);
+            let mut events = Vec::<Event<Layer>>::with_capacity(10);
+            mapper.map(&bitmap, &mut events);
 
-            match keys_processors
-                .iter_mut()
-                .try_for_each(|p| p.process(&mut keys))
+            keys_sender
+                .try_send(
+                    events
+                        .into_iter()
+                        .filter_map(|e| match e.action {
+                            Action::Key(k) => Some(k.into()),
+                            _ => None,
+                        })
+                        .collect(),
+                )
+                .ok(); // drop data if buffer is full
+
+            if DEBUG_LOG_STREAM_PROCESSOR_ENABLE_TIMING
+                && (n % DEBUG_LOG_STREAM_PROCESSOR_INTERVAL == 0)
             {
-                Err(_) => continue,
-                _ => {}
+                let scan_end_time = Timer::now();
+                debug!(
+                    "[{}] stream_processor: {} us\tpoll: {} us\trate: {} Hz\t budget: {} %",
+                    n,
+                    (scan_end_time - process_start_time).to_micros(),
+                    (scan_end_time - poll_end_time).to_micros(),
+                    1_000_000u64 / (scan_end_time - poll_end_time).to_micros(),
+                    (scan_end_time - process_start_time).to_micros() * 100
+                        / MATRIX_SCANNER_TARGET_POLL_PERIOD_MICROS
+                );
             }
 
-            keys_sender.try_send(keys).ok(); // drop data if buffer is full
+            poll_end_time = Timer::now();
+            n = n.wrapping_add(1);
         }
     }
 
     #[task(shared=[usb_keyboard], priority = 1)]
     async fn hid_reporter(
         mut ctx: hid_reporter::Context,
-        mut keys_receiver: Receiver<'static, Keys, KEYS_CHANNEL_BUFFER_COUNT>,
+        mut keys_receiver: Receiver<'static, Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE>,
     ) {
         info!("hid_reporter()");
         while let Ok(keys) = keys_receiver.recv().await {
@@ -334,18 +366,18 @@ mod kb {
                 debug!("keys: {:?}", keys.as_slice());
             }
 
-            ctx.shared
-                .usb_keyboard
-                .lock(|k| match k.device().write_report(keys) {
+            ctx.shared.usb_keyboard.lock(|k| {
+                match k.device().write_report(keys.into_iter().map(|k| k.into())) {
                     Ok(_) => {}
                     Err(UsbHidError::WouldBlock) => {}
                     Err(UsbHidError::Duplicate) => {}
                     Err(e) => {
                         core::panic!("Failed to write keyboard report: {:?}", e);
                     }
-                });
+                }
+            });
 
-            Timer::delay_until(start_time + HID_REPORTER_TARGET_POLL_PERIOD.micros()).await;
+            Timer::delay_until(start_time + HID_REPORTER_TARGET_POLL_PERIOD_MICROS.micros()).await;
         }
     }
 

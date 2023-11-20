@@ -9,12 +9,9 @@ use core::{
     result,
 };
 
-use usbd_human_interface_device::page::Keyboard;
-
 use crate::{
-    hid::Keys,
-    key::{Action, LayerIndex},
-    matrix::Bitmap,
+    key::{Action, Key, LayerIndex},
+    matrix::{Bitmap, Edge},
 };
 
 #[derive(Clone, Copy)]
@@ -59,99 +56,114 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize, const LAYER_COUNT: usize, L
     }
 }
 
+pub struct Event<L: LayerIndex> {
+    pub time_ticks: u64,
+    pub i: usize,
+    pub j: usize,
+    pub edge: Edge,
+    pub action: Action<L>,
+}
+
 pub trait BitmapProcessor<const ROW_COUNT: usize, const COL_COUNT: usize> {
     fn process(&mut self, bitmap: &mut Bitmap<ROW_COUNT, COL_COUNT>) -> Result;
 }
 
-pub trait Mapper<const ROW_COUNT: usize, const COL_COUNT: usize> {
-    fn map(&self, bitmap: &Bitmap<ROW_COUNT, COL_COUNT>, keys: &mut Keys);
-}
-
-pub struct KeysMapper<
+pub struct EventsMapper<
     const ROW_COUNT: usize,
     const COL_COUNT: usize,
     const LAYER_COUNT: usize,
     L: LayerIndex,
 > {
+    previous_bitmap: Bitmap<ROW_COUNT, COL_COUNT>,
     mapping: Mapping<ROW_COUNT, COL_COUNT, LAYER_COUNT, L>,
 }
 
 impl<const ROW_COUNT: usize, const COL_COUNT: usize, const LAYER_COUNT: usize, L: LayerIndex>
-    KeysMapper<ROW_COUNT, COL_COUNT, LAYER_COUNT, L>
+    EventsMapper<ROW_COUNT, COL_COUNT, LAYER_COUNT, L>
 {
     pub fn new(mapping: Mapping<ROW_COUNT, COL_COUNT, LAYER_COUNT, L>) -> Self {
         let mut m = mapping.clone();
         m.flatten();
-        return KeysMapper { mapping: m };
+        return EventsMapper {
+            previous_bitmap: Bitmap::default(),
+            mapping: m,
+        };
     }
 }
 
 impl<const ROW_COUNT: usize, const COL_COUNT: usize, const LAYER_COUNT: usize, L: LayerIndex>
-    Mapper<ROW_COUNT, COL_COUNT> for KeysMapper<ROW_COUNT, COL_COUNT, LAYER_COUNT, L>
+    EventsMapper<ROW_COUNT, COL_COUNT, LAYER_COUNT, L>
 {
-    fn map(&self, bitmap: &Bitmap<ROW_COUNT, COL_COUNT>, keys: &mut Keys) {
-        // collect positions
-        let mut positions = Vec::new();
-        for (i, row) in bitmap.iter().enumerate() {
-            for (j, pressed) in row.iter().enumerate() {
-                if *pressed {
-                    positions.push((i, j));
-                };
-            }
-        }
-
-        // resolve keys
-        let mut provisional_keys = Keys::with_capacity(positions.len());
+    pub fn map(&mut self, bitmap: &Bitmap<ROW_COUNT, COL_COUNT>, events: &mut Vec<Event<L>>) {
+        let mut provisional_events = Vec::<Event<L>>::with_capacity(10);
         let mut new_layer = true;
         let mut layer_idx = 0;
         while new_layer {
-            provisional_keys.clear();
+            provisional_events.clear();
             new_layer = false;
-            for (i, j) in &positions {
-                match self.mapping[layer_idx][*i][*j] {
-                    Action::Key(k) => provisional_keys.push(k.into()),
-                    Action::LayerModifier(l) => {
-                        if layer_idx < l.into() {
-                            new_layer = true;
-                            layer_idx = l.into();
+            for (i, row) in bitmap.matrix.iter().enumerate() {
+                for (j, (edge, pressed)) in row.iter().enumerate() {
+                    let action = self.mapping[layer_idx][i][j];
+                    if *pressed {
+                        match action {
+                            Action::LayerModifier(l) => {
+                                if layer_idx < l.into() {
+                                    new_layer = true;
+                                    layer_idx = l.into();
+                                    break; // repeat resolving on the next layer
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    _ => {}
+                    if !(*edge == Edge::None && !*pressed) {
+                        provisional_events.push(Event {
+                            time_ticks: bitmap.sample_time_ticks,
+                            i,
+                            j,
+                            edge: *edge,
+                            action,
+                        })
+                    }
                 }
             }
         }
-        keys.append(&mut provisional_keys);
+        *events = provisional_events;
+        self.previous_bitmap = *bitmap;
     }
 }
 
-pub trait KeysProcessor {
-    fn process(&mut self, keys: &mut Keys) -> Result;
+pub trait EventsProcessor<L: LayerIndex> {
+    async fn process(&mut self, events: &mut Vec<Event<L>>) -> Result;
 }
 
 pub struct KeyReplacer {
-    from: Keyboard,
-    to: Keyboard,
+    from: Key,
+    to: Key,
 }
 
 #[allow(dead_code)]
 impl KeyReplacer {
-    pub fn new(from: Keyboard, to: Keyboard) -> Self {
+    pub fn new(from: Key, to: Key) -> Self {
         return KeyReplacer { from, to };
     }
 }
 
-impl KeysProcessor for KeyReplacer {
-    fn process(&mut self, keys: &mut Keys) -> Result {
-        keys.iter_mut().for_each(|k| {
-            if *k == self.from {
-                *k = self.to
+impl<L: LayerIndex> EventsProcessor<L> for KeyReplacer {
+    async fn process(&mut self, events: &mut Vec<Event<L>>) -> Result {
+        events.iter_mut().for_each(|e| match &mut e.action {
+            Action::Key(k) => {
+                if *k == self.from {
+                    *k = self.to;
+                }
             }
+            _ => {}
         });
         return Ok(());
     }
 }
 
-type Result = result::Result<(), Error>;
+pub type Result = result::Result<(), Error>;
 
 #[derive(Debug)]
 pub struct Error {
@@ -160,7 +172,7 @@ pub struct Error {
 
 #[allow(dead_code)]
 impl Error {
-    fn new(msg: &str) -> Self {
+    pub fn new(msg: &str) -> Self {
         return Error {
             msg: msg.to_string(),
         };
