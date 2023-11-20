@@ -2,8 +2,8 @@ use defmt::Format;
 
 use crate::{
     key::{
-        Action::{Key as K, LayerModifier as LM, Pass as ___},
-        Key, LayerIndex,
+        Action::{Control as C, Key as K, LayerModifier as LM, Pass as ___},
+        Control, Key, LayerIndex,
     },
     stream::Mapping,
 };
@@ -11,6 +11,8 @@ use crate::{
 pub const ROW_COUNT: usize = 5;
 pub const COL_COUNT: usize = 15;
 pub const LAYER_COUNT: usize = 3;
+
+pub const LED_COUNT: usize = 67;
 
 pub const KEY_MAP: Mapping<{ ROW_COUNT }, { COL_COUNT }, { LAYER_COUNT }, Layer> = Mapping([
     [
@@ -29,7 +31,7 @@ pub const KEY_MAP: Mapping<{ ROW_COUNT }, { COL_COUNT }, { LAYER_COUNT }, Layer>
             K(Key::Minus),
             K(Key::Equal),
             K(Key::DeleteBackspace),
-            LM(Layer::Function1), // K(Key::PageUp),
+            K(Key::DeleteForward),
         ],
         [
             K(Key::Tab),
@@ -119,10 +121,38 @@ pub const KEY_MAP: Mapping<{ ROW_COUNT }, { COL_COUNT }, { LAYER_COUNT }, Layer>
             ___,
         ],
         [
-            ___, ___, ___, ___, ___, ___, ___, ___, ___, ___, ___, ___, ___, ___, ___,
+            ___,
+            C(Control::RGBAnimationNext),
+            C(Control::RGBSpeedUp),
+            C(Control::RGBBrightnessUp),
+            ___,
+            ___,
+            ___,
+            ___,
+            ___,
+            ___,
+            ___,
+            ___,
+            ___,
+            ___,
+            ___,
         ],
         [
-            ___, ___, ___, ___, ___, ___, ___, ___, ___, ___, ___, ___, ___, ___, ___,
+            ___,
+            C(Control::RGBAnimationPrevious),
+            C(Control::RGBSpeedDown),
+            C(Control::RGBBrightnessDown),
+            ___,
+            ___,
+            ___,
+            ___,
+            ___,
+            ___,
+            ___,
+            ___,
+            ___,
+            ___,
+            ___,
         ],
         [
             ___, ___, ___, ___, ___, ___, ___, ___, ___, ___, ___, ___, ___, ___, ___,

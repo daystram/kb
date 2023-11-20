@@ -4,9 +4,11 @@
 #![feature(async_fn_in_trait)]
 #![feature(error_in_core)]
 #![feature(return_position_impl_trait_in_trait)]
+#![feature(associated_type_defaults)]
 mod config;
 mod key;
 mod matrix;
+mod rgb;
 mod stream;
 mod util;
 
@@ -15,7 +17,7 @@ use {defmt_rtt as _, panic_probe as _};
 
 #[rtic::app(
     device = hal::pac,
-    dispatchers = [TIMER_IRQ_1, TIMER_IRQ_2]
+    dispatchers = [TIMER_IRQ_1, TIMER_IRQ_2, TIMER_IRQ_3]
 )]
 mod kb {
     extern crate alloc;
@@ -32,7 +34,9 @@ mod kb {
     pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
 
     use embedded_hal::PwmPin;
-    use hal::{clocks::init_clocks_and_plls, gpio, pac, prelude::*, pwm, sio, usb, Sio, Watchdog};
+    use hal::{
+        clocks::init_clocks_and_plls, gpio, pac, pio, prelude::*, pwm, sio, usb, Sio, Watchdog,
+    };
     use rtic_monotonics::{rp2040::*, Monotonic};
     use rtic_sync::channel::{Receiver, Sender};
     use usb_device::{
@@ -50,6 +54,7 @@ mod kb {
         config::{self, Layer, KEY_MAP},
         key::{Action, Key},
         matrix::{BasicVerticalSwitchMatrix, Bitmap, Scanner},
+        rgb::{RGBMatrix, RGBProcessor},
         stream::{BitmapProcessor, Event, EventsMapper, EventsProcessor},
     };
 
@@ -84,7 +89,7 @@ mod kb {
 
     #[local]
     struct Local {
-        matrix: BasicVerticalSwitchMatrix<{ config::ROW_COUNT }, { config::COL_COUNT }>,
+        switch_matrix: BasicVerticalSwitchMatrix<{ config::ROW_COUNT }, { config::COL_COUNT }>,
     }
 
     #[init(local = [usb_allocator: Option<UsbBusAllocator<usb::UsbBus>> = None])]
@@ -186,6 +191,9 @@ mod kb {
         let (keys_sender, keys_receiver) =
             rtic_sync::make_channel!(Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE);
 
+        let (frame_sender, frame_receiver) =
+            rtic_sync::make_channel!(Box<dyn Iterator<Item = smart_leds::RGB8>>, 1);
+
         // Init switch matrix
         #[rustfmt::skip]
         let switch_matrix = BasicVerticalSwitchMatrix::new(
@@ -215,13 +223,24 @@ mod kb {
             ],
         );
 
+        // Init LED matrix
+        let (mut pio0, sm0, _, _, _) = ctx.device.PIO0.split(&mut ctx.device.RESETS);
+        let ws = ws2812_pio::Ws2812Direct::new(
+            pins.gpio28.into_function(),
+            &mut pio0,
+            sm0,
+            clocks.peripheral_clock.freq(),
+        );
+        debug!("spawn rgb_matrix_renderer");
+        rgb_matrix_renderer::spawn(ws, frame_receiver).ok();
+
         // Init matrix scanner
         debug!("spawn matrix_scanner");
         matrix_scanner::spawn(bitmap_sender).ok();
 
         // Init stream processor
         debug!("spawn stream_processor");
-        stream_processor::spawn(bitmap_receiver, keys_sender).ok();
+        stream_processor::spawn(bitmap_receiver, keys_sender, frame_sender).ok();
 
         // Init HID reporter
         debug!("spawn hid_reporter");
@@ -299,6 +318,7 @@ mod kb {
             BITMAP_CHANNEL_BUFFER_SIZE,
         >,
         mut keys_sender: Sender<'static, Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE>,
+        frame_sender: Sender<'static, Box<dyn Iterator<Item = smart_leds::RGB8>>, 1>,
     ) {
         info!("stream_processor()");
         let bitmap_processors: &mut [&mut dyn BitmapProcessor<
@@ -306,6 +326,7 @@ mod kb {
             { config::COL_COUNT },
         >] = &mut [];
         let mut mapper = EventsMapper::new(KEY_MAP);
+        let rgb_events_processor = &mut RGBProcessor::<{ config::LED_COUNT }>::new(frame_sender);
 
         let mut poll_end_time = Timer::now();
         let mut n: u64 = 0;
@@ -321,6 +342,11 @@ mod kb {
 
             let mut events = Vec::<Event<Layer>>::with_capacity(10);
             mapper.map(&bitmap, &mut events);
+
+            match rgb_events_processor.process(&mut events).await {
+                Err(_) => continue,
+                _ => {}
+            }
 
             keys_sender
                 .try_send(
@@ -434,6 +460,20 @@ mod kb {
 
             lerp(&mut channel, MAX_PWM_POWER, 0, 200, 10).await;
         }
+    }
+    #[task(priority = 3)]
+    async fn rgb_matrix_renderer(
+        _ctx: rgb_matrix_renderer::Context,
+        ws: ws2812_pio::Ws2812Direct<
+            pac::PIO0,
+            pio::SM0,
+            gpio::Pin<gpio::bank0::Gpio28, gpio::FunctionPio0, gpio::PullDown>,
+        >,
+        frame_receiver: Receiver<'static, Box<dyn Iterator<Item = smart_leds::RGB8>>, 1>,
+    ) {
+        debug!("rgb_matrix_renderer()");
+        let mut rgb_matrix = RGBMatrix::<{ config::LED_COUNT }, _>::new(ws);
+        rgb_matrix.render(frame_receiver).await;
     }
 
     async fn lerp<S: pwm::AnySlice>(

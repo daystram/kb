@@ -7,6 +7,7 @@ pub enum Action<L: LayerIndex> {
     Pass,
     None,
     Key(Key),
+    Control(Control),
     LayerModifier(L),
 }
 
@@ -206,4 +207,16 @@ impl Into<Keyboard> for Key {
     }
 }
 
-pub trait LayerIndex: Copy + Into<usize> {}
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Format, PartialEq)]
+pub enum Control {
+    RGBAnimationNext,
+    RGBAnimationPrevious,
+    RGBSpeedUp,
+    RGBSpeedDown,
+    RGBBrightnessUp,
+    RGBBrightnessDown,
+    RGBDirectionToggle,
+}
+
+pub trait LayerIndex: Copy + Into<usize> + Format {}
