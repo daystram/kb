@@ -105,15 +105,12 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize, const LAYER_COUNT: usize, L
                 for (j, (edge, pressed)) in row.iter().enumerate() {
                     let action = self.mapping[layer_idx][i][j];
                     if *pressed {
-                        match action {
-                            Action::LayerModifier(l) => {
-                                if layer_idx < l.into() {
-                                    new_layer = true;
-                                    layer_idx = l.into();
-                                    break; // repeat resolving on the next layer
-                                }
+                        if let Action::LayerModifier(l) = action {
+                            if layer_idx < l.into() {
+                                new_layer = true;
+                                layer_idx = l.into();
+                                break; // repeat resolving on the next layer
                             }
-                            _ => {}
                         }
                     }
                     if !(*edge == Edge::None && !*pressed) {
@@ -134,7 +131,7 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize, const LAYER_COUNT: usize, L
 }
 
 pub trait EventsProcessor<L: LayerIndex> {
-    async fn process(&mut self, events: &mut Vec<Event<L>>) -> Result;
+    fn process(&mut self, events: &mut Vec<Event<L>>) -> Result;
 }
 
 pub struct KeyReplacer {
@@ -150,7 +147,7 @@ impl KeyReplacer {
 }
 
 impl<L: LayerIndex> EventsProcessor<L> for KeyReplacer {
-    async fn process(&mut self, events: &mut Vec<Event<L>>) -> Result {
+    fn process(&mut self, events: &mut Vec<Event<L>>) -> Result {
         events.iter_mut().for_each(|e| match &mut e.action {
             Action::Key(k) => {
                 if *k == self.from {
