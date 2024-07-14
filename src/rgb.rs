@@ -21,6 +21,8 @@ const FRAME_TIME_MAX_MICROS: u64 = 1_000_000;
 
 type Frame<const LED_COUNT: usize> = [RGB8; LED_COUNT];
 
+pub trait FrameIterator = Iterator<Item = RGB8>;
+
 #[derive(Clone, Copy)]
 pub struct RGBMatrix<const LED_COUNT: usize, W: SmartLedsWrite>
 where
@@ -39,7 +41,7 @@ where
 
     pub async fn render(
         &mut self,
-        mut frame_receiver: Receiver<'static, Box<dyn Iterator<Item = RGB8>>, 1>,
+        mut frame_receiver: Receiver<'static, Box<dyn FrameIterator>, 1>,
     ) {
         while let Ok(frame) = frame_receiver.recv().await {
             self.writer
@@ -73,17 +75,16 @@ impl<const LED_COUNT: usize> Default for AnimationState<LED_COUNT> {
 }
 
 pub struct RGBProcessor<const LED_COUNT: usize> {
-    animations:
-        [Box<dyn AnimationIterator<{ LED_COUNT }, Item = Box<dyn Iterator<Item = RGB8>>>>; 4],
+    animations: [Box<dyn AnimationIterator<{ LED_COUNT }, Item = Box<dyn FrameIterator>>>; 4],
     animation_idx: usize,
-    frame_sender: Sender<'static, Box<dyn Iterator<Item = RGB8>>, 1>,
+    frame_sender: Sender<'static, Box<dyn FrameIterator>, 1>,
     last_render: <rtic_monotonics::rp2040::Timer as Monotonic>::Instant,
     frame_time_micros: u64,
     brightness: u8,
 }
 
 impl<const LED_COUNT: usize> RGBProcessor<{ LED_COUNT }> {
-    pub fn new(frame_sender: Sender<'static, Box<dyn Iterator<Item = RGB8>>, 1>) -> Self {
+    pub fn new(frame_sender: Sender<'static, Box<dyn FrameIterator>, 1>) -> Self {
         return RGBProcessor {
             animations: [
                 Box::new(WheelAnimation::new(Default::default())),
@@ -169,7 +170,7 @@ trait DirectionControl {
 }
 
 trait AnimationIterator<const LED_COUNT: usize> {
-    type Item = Box<dyn Iterator<Item = RGB8>>;
+    type Item = Box<dyn FrameIterator>;
 
     fn next(&mut self) -> Option<Self::Item>;
 }
@@ -206,7 +207,7 @@ impl<const LED_COUNT: usize> ScanAnimation<LED_COUNT> {
 }
 
 impl<const LED_COUNT: usize> AnimationIterator<LED_COUNT> for ScanAnimation<LED_COUNT> {
-    fn next(&mut self) -> Option<Box<dyn Iterator<Item = RGB8>>> {
+    fn next(&mut self) -> Option<Self::Item> {
         self.animation_state.step();
         for (i, d) in self.animation_state.frame.iter_mut().enumerate() {
             *d = if self.animation_state.t as usize % LED_COUNT == i {
@@ -248,7 +249,7 @@ impl<const LED_COUNT: usize> BreatheAnimation<LED_COUNT> {
 }
 
 impl<const LED_COUNT: usize> AnimationIterator<LED_COUNT> for BreatheAnimation<LED_COUNT> {
-    fn next(&mut self) -> Option<Box<dyn Iterator<Item = RGB8>>> {
+    fn next(&mut self) -> Option<Self::Item> {
         self.animation_state.step();
         for (i, d) in self.animation_state.frame.iter_mut().enumerate() {
             *d = Self::breathe(
@@ -286,7 +287,7 @@ impl<const LED_COUNT: usize> WheelAnimation<LED_COUNT> {
     }
 }
 impl<const LED_COUNT: usize> AnimationIterator<LED_COUNT> for WheelAnimation<LED_COUNT> {
-    fn next(&mut self) -> Option<Box<dyn Iterator<Item = RGB8>>> {
+    fn next(&mut self) -> Option<Self::Item> {
         self.animation_state.step();
         for (i, d) in self.animation_state.frame.iter_mut().enumerate() {
             *d = Self::wheel(

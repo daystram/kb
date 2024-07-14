@@ -5,6 +5,7 @@
 #![feature(error_in_core)]
 #![feature(return_position_impl_trait_in_trait)]
 #![feature(associated_type_defaults)]
+#![feature(trait_alias)]
 mod config;
 mod key;
 mod matrix;
@@ -54,7 +55,7 @@ mod kb {
         config::{self, Layer, KEY_MAP},
         key::{Action, Key},
         matrix::{BasicVerticalSwitchMatrix, Bitmap, Scanner},
-        rgb::{RGBMatrix, RGBProcessor},
+        rgb::{FrameIterator, RGBMatrix, RGBProcessor},
         stream::{BitmapProcessor, Event, EventsMapper, EventsProcessor},
     };
 
@@ -191,8 +192,7 @@ mod kb {
         let (keys_sender, keys_receiver) =
             rtic_sync::make_channel!(Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE);
 
-        let (frame_sender, frame_receiver) =
-            rtic_sync::make_channel!(Box<dyn Iterator<Item = smart_leds::RGB8>>, 1);
+        let (frame_sender, frame_receiver) = rtic_sync::make_channel!(Box<dyn FrameIterator>, 1);
 
         // Init switch matrix
         #[rustfmt::skip]
@@ -318,7 +318,7 @@ mod kb {
             BITMAP_CHANNEL_BUFFER_SIZE,
         >,
         mut keys_sender: Sender<'static, Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE>,
-        frame_sender: Sender<'static, Box<dyn Iterator<Item = smart_leds::RGB8>>, 1>,
+        frame_sender: Sender<'static, Box<dyn FrameIterator>, 1>,
     ) {
         info!("stream_processor()");
         let bitmap_processors: &mut [&mut dyn BitmapProcessor<
@@ -343,7 +343,7 @@ mod kb {
             let mut events = Vec::<Event<Layer>>::with_capacity(10);
             mapper.map(&bitmap, &mut events);
 
-            match rgb_events_processor.process(&mut events).await {
+            match rgb_events_processor.process(&mut events) {
                 Err(_) => continue,
                 _ => {}
             }
@@ -469,7 +469,7 @@ mod kb {
             pio::SM0,
             gpio::Pin<gpio::bank0::Gpio28, gpio::FunctionPio0, gpio::PullDown>,
         >,
-        frame_receiver: Receiver<'static, Box<dyn Iterator<Item = smart_leds::RGB8>>, 1>,
+        frame_receiver: Receiver<'static, Box<dyn FrameIterator>, 1>,
     ) {
         debug!("rgb_matrix_renderer()");
         let mut rgb_matrix = RGBMatrix::<{ config::LED_COUNT }, _>::new(ws);
