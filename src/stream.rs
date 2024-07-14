@@ -131,7 +131,7 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize, const LAYER_COUNT: usize, L
 }
 
 pub trait EventsProcessor<L: LayerIndex> {
-    async fn process(&mut self, events: &mut Vec<Event<L>>) -> Result;
+    fn process(&mut self, events: &mut Vec<Event<L>>) -> Result;
 }
 
 pub struct KeyReplacer {
@@ -147,7 +147,7 @@ impl KeyReplacer {
 }
 
 impl<L: LayerIndex> EventsProcessor<L> for KeyReplacer {
-    async fn process(&mut self, events: &mut Vec<Event<L>>) -> Result {
+    fn process(&mut self, events: &mut Vec<Event<L>>) -> Result {
         events.iter_mut().for_each(|e| match &mut e.action {
             Action::Key(k) => {
                 if *k == self.from {

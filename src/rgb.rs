@@ -101,7 +101,7 @@ impl<const LED_COUNT: usize> RGBProcessor<{ LED_COUNT }> {
 }
 
 impl<const LED_COUNT: usize, L: LayerIndex> EventsProcessor<L> for RGBProcessor<{ LED_COUNT }> {
-    async fn process(&mut self, events: &mut Vec<Event<L>>) -> StreamResult {
+    fn process(&mut self, events: &mut Vec<Event<L>>) -> StreamResult {
         events.into_iter().for_each(|e| {
             if e.edge == Edge::Rising {
                 match e.action {
