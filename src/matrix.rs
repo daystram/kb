@@ -4,6 +4,7 @@ use defmt::Format;
 
 use embedded_hal::digital::v2::{InputPin, OutputPin};
 use rp2040_hal::gpio;
+use rtic_monotonics::{rp2040::*, Monotonic};
 
 use crate::util::halt;
 
@@ -92,6 +93,7 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, COL_COUN
             col.set_low().unwrap();
             halt(1).await;
         }
+        bitmap.scan_time_ticks = Timer::now().ticks();
         self.previous_bitmap = bitmap;
         return bitmap;
     }
