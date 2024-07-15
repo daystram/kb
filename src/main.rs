@@ -55,6 +55,7 @@ mod kb {
         key::{Action, Key},
         matrix::{BasicVerticalSwitchMatrix, Bitmap, Scanner},
         processor::{
+            bitmap::debounce::KeyRisingFallingDebounceProcessor,
             events::rgb::{FrameIterator, RGBMatrix, RGBProcessor},
             keymap::KeyMapper,
             BitmapProcessor, Event, EventsProcessor,
@@ -326,7 +327,7 @@ mod kb {
         let bitmap_processors: &mut [&mut dyn BitmapProcessor<
             { config::ROW_COUNT },
             { config::COL_COUNT },
-        >] = &mut [];
+        >] = &mut [&mut KeyRisingFallingDebounceProcessor::new(10.millis())];
         let mut mapper = KeyMapper::new(KEY_MAP);
         let events_processors: &mut [&mut dyn EventsProcessor<Layer>] =
             &mut [&mut RGBProcessor::<{ config::LED_COUNT }>::new(
