@@ -1,15 +1,18 @@
+pub mod animation;
+
 extern crate alloc;
 use alloc::{boxed::Box, vec::Vec};
+use animation::{BreatheAnimation, NoneAnimation, ScanAnimation, WheelAnimation};
 
 use core::ops::Mul;
 use rtic_monotonics::{rp2040::*, Monotonic};
 use rtic_sync::channel::{Receiver, Sender};
-use smart_leds::{brightness, SmartLedsWrite, RGB8};
+use smart_leds::{brightness, SmartLedsWrite, RGB8 as SLRGB8};
 
 use crate::{
     key::{Action, Control, LayerIndex},
     matrix::Edge,
-    stream::{Event, EventsProcessor, Result as StreamResult},
+    processor::{Event, EventsProcessor, Result},
 };
 
 // More than 64 pulls too much power, it fries the board
@@ -18,6 +21,8 @@ const LED_MAX_BRIGHTNESS: u8 = 28;
 const FRAME_TIME_MIN_MICROS: u64 = 1_000;
 const FRAME_TIME_DEFAULT_MICROS: u64 = 20_000;
 const FRAME_TIME_MAX_MICROS: u64 = 1_000_000;
+
+type RGB8 = SLRGB8;
 
 type Frame<const LED_COUNT: usize> = [RGB8; LED_COUNT];
 
@@ -31,6 +36,7 @@ where
     writer: W,
 }
 
+#[allow(dead_code)]
 impl<const LED_COUNT: usize, W: SmartLedsWrite> RGBMatrix<LED_COUNT, W>
 where
     W::Color: From<RGB8>,
@@ -51,7 +57,7 @@ where
     }
 }
 
-struct AnimationState<const LED_COUNT: usize> {
+pub struct AnimationState<const LED_COUNT: usize> {
     t: u64,
     n: u8,
     frame: Frame<{ LED_COUNT }>,
@@ -83,6 +89,7 @@ pub struct RGBProcessor<const LED_COUNT: usize> {
     brightness: u8,
 }
 
+#[allow(dead_code)]
 impl<const LED_COUNT: usize> RGBProcessor<{ LED_COUNT }> {
     pub fn new(frame_sender: Sender<'static, Box<dyn FrameIterator>, 1>) -> Self {
         return RGBProcessor {
@@ -102,7 +109,7 @@ impl<const LED_COUNT: usize> RGBProcessor<{ LED_COUNT }> {
 }
 
 impl<const LED_COUNT: usize, L: LayerIndex> EventsProcessor<L> for RGBProcessor<{ LED_COUNT }> {
-    fn process(&mut self, events: &mut Vec<Event<L>>) -> StreamResult {
+    fn process(&mut self, events: &mut Vec<Event<L>>) -> Result {
         events.into_iter().for_each(|e| {
             if e.edge == Edge::Rising {
                 match e.action {
@@ -165,137 +172,8 @@ impl<const LED_COUNT: usize, L: LayerIndex> EventsProcessor<L> for RGBProcessor<
     }
 }
 
-trait DirectionControl {
-    fn set_direction(&mut self, left: bool);
-}
-
 trait AnimationIterator<const LED_COUNT: usize> {
     type Item = Box<dyn FrameIterator>;
 
     fn next(&mut self) -> Option<Self::Item>;
-}
-
-struct NoneAnimation {}
-
-impl NoneAnimation {
-    fn new() -> Self {
-        Self {}
-    }
-}
-
-impl<const LED_COUNT: usize> AnimationIterator<LED_COUNT> for NoneAnimation {
-    fn next(&mut self) -> Option<Self::Item> {
-        Some(Box::new([(0, 0, 0).into(); LED_COUNT].into_iter()))
-    }
-}
-
-struct ScanAnimation<const LED_COUNT: usize> {
-    animation_state: AnimationState<{ LED_COUNT }>,
-    direction_left: bool,
-}
-
-impl<const LED_COUNT: usize> ScanAnimation<LED_COUNT> {
-    fn new(animation_state: AnimationState<LED_COUNT>) -> Self
-    where
-        Self: Sized,
-    {
-        return Self {
-            animation_state,
-            direction_left: false,
-        };
-    }
-}
-
-impl<const LED_COUNT: usize> AnimationIterator<LED_COUNT> for ScanAnimation<LED_COUNT> {
-    fn next(&mut self) -> Option<Self::Item> {
-        self.animation_state.step();
-        for (i, d) in self.animation_state.frame.iter_mut().enumerate() {
-            *d = if self.animation_state.t as usize % LED_COUNT == i {
-                (255, 255, 255).into()
-            } else {
-                (0, 0, 0).into()
-            };
-        }
-        Some(Box::new(self.animation_state.frame.into_iter()))
-    }
-}
-
-impl<const LED_COUNT: usize> DirectionControl for ScanAnimation<LED_COUNT> {
-    fn set_direction(&mut self, left: bool) {
-        self.direction_left = left;
-    }
-}
-
-struct BreatheAnimation<const LED_COUNT: usize> {
-    animation_state: AnimationState<{ LED_COUNT }>,
-}
-
-impl<const LED_COUNT: usize> BreatheAnimation<LED_COUNT> {
-    fn new(animation_state: AnimationState<LED_COUNT>) -> Self
-    where
-        Self: Sized,
-    {
-        return Self { animation_state };
-    }
-
-    fn breathe(mut t: u8) -> RGB8 {
-        if t < 128 {
-            t = t * 2;
-        } else {
-            t = (255 - t) * 2;
-        }
-        return (t, t, t).into();
-    }
-}
-
-impl<const LED_COUNT: usize> AnimationIterator<LED_COUNT> for BreatheAnimation<LED_COUNT> {
-    fn next(&mut self) -> Option<Self::Item> {
-        self.animation_state.step();
-        for (i, d) in self.animation_state.frame.iter_mut().enumerate() {
-            *d = Self::breathe(
-                self.animation_state
-                    .n
-                    .wrapping_add((i * 128 / LED_COUNT) as u8),
-            );
-        }
-        Some(Box::new(self.animation_state.frame.into_iter()))
-    }
-}
-
-struct WheelAnimation<const LED_COUNT: usize> {
-    animation_state: AnimationState<{ LED_COUNT }>,
-}
-
-impl<const LED_COUNT: usize> WheelAnimation<LED_COUNT> {
-    fn new(animation_state: AnimationState<LED_COUNT>) -> Self
-    where
-        Self: Sized,
-    {
-        return Self { animation_state };
-    }
-
-    fn wheel(mut rot: u8) -> RGB8 {
-        if rot < 85 {
-            return (0, 255 - (rot * 3), rot * 3).into();
-        } else if rot < 170 {
-            rot -= 85;
-            return (rot * 3, 0, 255 - (rot * 3)).into();
-        } else {
-            rot -= 170;
-            return (255 - (rot * 3), rot * 3, 0).into();
-        }
-    }
-}
-impl<const LED_COUNT: usize> AnimationIterator<LED_COUNT> for WheelAnimation<LED_COUNT> {
-    fn next(&mut self) -> Option<Self::Item> {
-        self.animation_state.step();
-        for (i, d) in self.animation_state.frame.iter_mut().enumerate() {
-            *d = Self::wheel(
-                self.animation_state
-                    .n
-                    .wrapping_add((i * 255 / LED_COUNT) as u8),
-            );
-        }
-        Some(Box::new(self.animation_state.frame.into_iter()))
-    }
 }

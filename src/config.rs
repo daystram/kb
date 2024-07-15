@@ -5,7 +5,7 @@ use crate::{
         Action::{Control as C, Key as K, LayerModifier as LM, Pass as ___},
         Control, Key, LayerIndex,
     },
-    stream::Mapping,
+    processor::keymap::KeyMap,
 };
 
 pub const ROW_COUNT: usize = 5;
@@ -14,7 +14,7 @@ pub const LAYER_COUNT: usize = 3;
 
 pub const LED_COUNT: usize = 67;
 
-pub const KEY_MAP: Mapping<{ ROW_COUNT }, { COL_COUNT }, { LAYER_COUNT }, Layer> = Mapping([
+pub const KEY_MAP: KeyMap<{ ROW_COUNT }, { COL_COUNT }, { LAYER_COUNT }, Layer> = KeyMap([
     [
         [
             K(Key::Escape),

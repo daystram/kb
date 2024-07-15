@@ -94,6 +94,7 @@ pub struct BasicHorizontalSwitchMatrix<const ROW_COUNT: usize, const COL_COUNT: 
     previous_bitmap: Bitmap<{ ROW_COUNT }, { COL_COUNT }>,
 }
 
+#[allow(dead_code)]
 impl<const ROW_COUNT: usize, const COL_COUNT: usize>
     BasicHorizontalSwitchMatrix<ROW_COUNT, COL_COUNT>
 {
