@@ -28,15 +28,24 @@ impl From<(bool, bool)> for Edge {
 
 #[derive(Clone, Copy, Debug, Format)]
 pub struct Bitmap<const ROW_COUNT: usize, const COL_COUNT: usize> {
-    pub sample_time_ticks: u64,
-    pub matrix: [[(Edge, bool); COL_COUNT]; ROW_COUNT],
+    pub scan_time_ticks: u64,
+    pub matrix: [[Bit; COL_COUNT]; ROW_COUNT],
+}
+
+#[derive(Clone, Copy, Debug, Format)]
+pub struct Bit {
+    pub edge: Edge,
+    pub pressed: bool,
 }
 
 impl<const ROW_COUNT: usize, const COL_COUNT: usize> Default for Bitmap<ROW_COUNT, COL_COUNT> {
     fn default() -> Self {
         Bitmap {
-            sample_time_ticks: 0,
-            matrix: [[(Edge::None, false); COL_COUNT]; ROW_COUNT],
+            scan_time_ticks: 0,
+            matrix: [[Bit {
+                edge: Edge::None,
+                pressed: false,
+            }; COL_COUNT]; ROW_COUNT],
         }
     }
 }
@@ -75,10 +84,10 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, COL_COUN
             col.set_high().unwrap();
             for (i, row) in self.rows.iter().enumerate() {
                 let pressed = row.is_high().unwrap();
-                bitmap.matrix[i][j] = (
-                    Edge::from((self.previous_bitmap.matrix[i][j].1, pressed)),
+                bitmap.matrix[i][j] = Bit {
+                    edge: Edge::from((self.previous_bitmap.matrix[i][j].pressed, pressed)),
                     pressed,
-                )
+                }
             }
             col.set_low().unwrap();
             halt(1).await;
@@ -119,10 +128,10 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, COL_COUN
             row.set_high().unwrap();
             for (j, col) in self.cols.iter().enumerate() {
                 let pressed = col.is_high().unwrap();
-                bitmap.matrix[i][j] = (
-                    Edge::from((self.previous_bitmap.matrix[i][j].1, pressed)),
+                bitmap.matrix[i][j] = Bit {
+                    edge: Edge::from((self.previous_bitmap.matrix[i][j].pressed, pressed)),
                     pressed,
-                )
+                }
             }
             row.set_low().unwrap();
             halt(1).await;

@@ -85,9 +85,9 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize, const LAYER_COUNT: usize, L
             provisional_events.clear();
             new_layer = false;
             for (i, row) in bitmap.matrix.iter().enumerate() {
-                for (j, (edge, pressed)) in row.iter().enumerate() {
+                for (j, bit) in row.iter().enumerate() {
                     let action = self.mapping[layer_idx][i][j];
-                    if *pressed {
+                    if bit.pressed {
                         if let Action::LayerModifier(l) = action {
                             if layer_idx < l.into() {
                                 new_layer = true;
@@ -96,12 +96,13 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize, const LAYER_COUNT: usize, L
                             }
                         }
                     }
-                    if !(*edge == Edge::None && !*pressed) {
+                    // push non-idling event
+                    if !(bit.edge == Edge::None && !bit.pressed) {
                         provisional_events.push(Event {
-                            time_ticks: bitmap.sample_time_ticks,
+                            time_ticks: bitmap.scan_time_ticks,
                             i,
                             j,
-                            edge: *edge,
+                            edge: bit.edge,
                             action,
                         })
                     }
