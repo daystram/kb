@@ -9,8 +9,7 @@
 mod config;
 mod key;
 mod matrix;
-mod rgb;
-mod stream;
+mod processor;
 mod util;
 
 extern crate rp2040_hal as hal;
@@ -55,8 +54,12 @@ mod kb {
         config::{self, Layer, KEY_MAP},
         key::{Action, Key},
         matrix::{BasicVerticalSwitchMatrix, Bitmap, Scanner},
-        rgb::{FrameIterator, RGBMatrix, RGBProcessor},
-        stream::{BitmapProcessor, Event, EventsMapper, EventsProcessor},
+        processor::{
+            bitmap::debounce::KeyRisingFallingDebounceProcessor,
+            events::rgb::{FrameIterator, RGBMatrix, RGBProcessor},
+            keymap::KeyMapper,
+            BitmapProcessor, Event, EventsProcessor,
+        },
     };
 
     const XOSC_CRYSTAL_FREQ: u32 = 12_000_000;
@@ -324,9 +327,12 @@ mod kb {
         let bitmap_processors: &mut [&mut dyn BitmapProcessor<
             { config::ROW_COUNT },
             { config::COL_COUNT },
-        >] = &mut [];
-        let mut mapper = EventsMapper::new(KEY_MAP);
-        let rgb_events_processor = &mut RGBProcessor::<{ config::LED_COUNT }>::new(frame_sender);
+        >] = &mut [&mut KeyRisingFallingDebounceProcessor::new(10.millis())];
+        let mut mapper = KeyMapper::new(KEY_MAP);
+        let events_processors: &mut [&mut dyn EventsProcessor<Layer>] =
+            &mut [&mut RGBProcessor::<{ config::LED_COUNT }>::new(
+                frame_sender,
+            )];
 
         let mut poll_end_time = Timer::now();
         let mut n: u64 = 0;
@@ -343,7 +349,10 @@ mod kb {
             let mut events = Vec::<Event<Layer>>::with_capacity(10);
             mapper.map(&bitmap, &mut events);
 
-            match rgb_events_processor.process(&mut events) {
+            match events_processors
+                .iter_mut()
+                .try_for_each(|p| p.process(&mut events))
+            {
                 Err(_) => continue,
                 _ => {}
             }
