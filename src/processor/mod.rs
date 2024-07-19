@@ -2,7 +2,6 @@ pub mod bitmap;
 pub mod events;
 pub mod keymap;
 
-extern crate alloc;
 use alloc::{
     string::{String, ToString},
     vec::Vec,

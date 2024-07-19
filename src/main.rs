@@ -1,9 +1,6 @@
 #![no_std]
 #![no_main]
 #![feature(type_alias_impl_trait)]
-#![feature(async_fn_in_trait)]
-#![feature(error_in_core)]
-#![feature(return_position_impl_trait_in_trait)]
 #![feature(associated_type_defaults)]
 #![feature(trait_alias)]
 mod config;
@@ -12,6 +9,7 @@ mod matrix;
 mod processor;
 mod util;
 
+extern crate alloc;
 extern crate rp2040_hal as hal;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -20,7 +18,6 @@ use {defmt_rtt as _, panic_probe as _};
     dispatchers = [TIMER_IRQ_1, TIMER_IRQ_2, TIMER_IRQ_3]
 )]
 mod kb {
-    extern crate alloc;
     use alloc::{boxed::Box, vec::Vec};
     #[global_allocator]
     static HEAP: embedded_alloc::Heap = embedded_alloc::Heap::empty();
@@ -33,17 +30,16 @@ mod kb {
     #[used]
     pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
 
-    use embedded_hal::PwmPin;
+    use embedded_hal::pwm::SetDutyCycle;
     use hal::{
         clocks::init_clocks_and_plls, gpio, pac, pio, prelude::*, pwm, sio, usb, Sio, Watchdog,
     };
-    use rtic_monotonics::{rp2040::*, Monotonic};
+
+    use rtic_monotonics::rp2040::prelude::*;
+    rp2040_timer_monotonic!(Mono);
+
     use rtic_sync::channel::{Receiver, Sender};
-    use usb_device::{
-        class_prelude::UsbBusAllocator,
-        prelude::{UsbDevice, UsbDeviceBuilder},
-        UsbError,
-    };
+    use usb_device::{class_prelude::*, prelude::*, UsbError};
     use usbd_human_interface_device::{
         device::{self, keyboard::NKROBootKeyboard},
         usb_class::{UsbHidClass, UsbHidClassBuilder},
@@ -119,12 +115,9 @@ mod kb {
         // See https://developer.arm.com/docs/100737/0100/power-management/sleep-mode/sleep-on-exit-bit
         ctx.core.SCB.set_sleepdeep();
 
-        // Initialize the interrupt for the RP2040 timer and obtain the token proving that we have
-        let rp2040_timer_token = rtic_monotonics::create_rp2040_monotonic_token!();
-
-        // Configure the clocks, watchdog - The default is to generate a 125 MHz system clock
-        Timer::start(ctx.device.TIMER, &mut ctx.device.RESETS, rp2040_timer_token);
+        // Configure watchdog, monotonics, and clock - The default is to generate a 125 MHz system clock
         let mut watchdog = Watchdog::new(ctx.device.WATCHDOG);
+        Mono::start(ctx.device.TIMER, &mut ctx.device.RESETS);
         let clocks = init_clocks_and_plls(
             XOSC_CRYSTAL_FREQ,
             ctx.device.XOSC,
@@ -164,14 +157,13 @@ mod kb {
             .build(usb_allocator);
 
         info!("init usb device");
-        let usb_device = UsbDeviceBuilder::new(
-            usb_allocator,
-            usb_device::prelude::UsbVidPid(0x1111, 0x1111),
-        )
-        .manufacturer("daystram")
-        .product("kb")
-        .serial_number("8888")
-        .build();
+        let usb_device = UsbDeviceBuilder::new(usb_allocator, UsbVidPid(0x1111, 0x1111))
+            .strings(&[StringDescriptors::default()
+                .manufacturer("daystram")
+                .product("kb")
+                .serial_number("8888")])
+            .unwrap()
+            .build();
 
         debug!("spawn hid_usb_tick");
         hid_usb_tick::spawn().ok();
@@ -228,7 +220,11 @@ mod kb {
 
         // Init LED matrix
         let (mut pio0, sm0, _, _, _) = ctx.device.PIO0.split(&mut ctx.device.RESETS);
-        let ws = ws2812_pio::Ws2812Direct::new(
+        let ws: ws2812_pio::Ws2812Direct<
+            pac::PIO0,
+            pio::SM0,
+            gpio::Pin<gpio::bank0::Gpio28, gpio::FunctionPio0, gpio::PullDown>,
+        > = ws2812_pio::Ws2812Direct::new(
             pins.gpio28.into_function(),
             &mut pio0,
             sm0,
@@ -284,16 +280,17 @@ mod kb {
         >,
     ) {
         info!("matrix_scanner()");
-        let mut poll_end_time = Timer::now();
+        let mut poll_end_time = Mono::now();
         let mut n: u64 = 0;
         loop {
-            let scan_start_time = Timer::now();
+            let scan_start_time = Mono::now();
             let bitmap = ctx.local.switch_matrix.scan().await;
+
             bitmap_sender.try_send(bitmap).ok(); // drop data if buffer is full
 
             if DEBUG_LOG_MATRIX_SCANNER_ENABLE_TIMING && n % DEBUG_LOG_MATRIX_SCANNER_INTERVAL == 0
             {
-                let scan_end_time = Timer::now();
+                let scan_end_time = Mono::now();
                 debug!(
                     "[{}] matrix_scanner: {} us\tpoll: {} us\trate: {} Hz\t budget: {} %",
                     n,
@@ -305,9 +302,9 @@ mod kb {
                 );
             }
 
-            poll_end_time = Timer::now();
+            poll_end_time = Mono::now();
             n = n.wrapping_add(1);
-            Timer::delay_until(scan_start_time + MATRIX_SCANNER_TARGET_POLL_PERIOD_MICROS.micros())
+            Mono::delay_until(scan_start_time + MATRIX_SCANNER_TARGET_POLL_PERIOD_MICROS.micros())
                 .await;
         }
     }
@@ -334,10 +331,10 @@ mod kb {
                 frame_sender,
             )];
 
-        let mut poll_end_time = Timer::now();
+        let mut poll_end_time = Mono::now();
         let mut n: u64 = 0;
         while let Ok(mut bitmap) = bitmap_receiver.recv().await {
-            let process_start_time = Timer::now();
+            let process_start_time = Mono::now();
             match bitmap_processors
                 .iter_mut()
                 .try_for_each(|p| p.process(&mut bitmap))
@@ -372,7 +369,7 @@ mod kb {
             if DEBUG_LOG_STREAM_PROCESSOR_ENABLE_TIMING
                 && (n % DEBUG_LOG_STREAM_PROCESSOR_INTERVAL == 0)
             {
-                let scan_end_time = Timer::now();
+                let scan_end_time = Mono::now();
                 debug!(
                     "[{}] stream_processor: {} us\tpoll: {} us\trate: {} Hz\t budget: {} %",
                     n,
@@ -384,7 +381,7 @@ mod kb {
                 );
             }
 
-            poll_end_time = Timer::now();
+            poll_end_time = Mono::now();
             n = n.wrapping_add(1);
         }
     }
@@ -396,7 +393,7 @@ mod kb {
     ) {
         info!("hid_reporter()");
         while let Ok(keys) = keys_receiver.recv().await {
-            let start_time = Timer::now();
+            let start_time = Mono::now();
             if DEBUG_LOG_SENT_KEYS {
                 debug!("keys: {:?}", keys.as_slice());
             }
@@ -412,11 +409,11 @@ mod kb {
                 }
             });
 
-            Timer::delay_until(start_time + HID_REPORTER_TARGET_POLL_PERIOD_MICROS.micros()).await;
+            Mono::delay_until(start_time + HID_REPORTER_TARGET_POLL_PERIOD_MICROS.micros()).await;
         }
     }
 
-    #[task(binds = USBCTRL_IRQ, shared = [usb_device, usb_keyboard], local=[], priority = 1)]
+    #[task(binds = USBCTRL_IRQ, shared = [usb_device, usb_keyboard], priority = 1)]
     fn hid_reader(ctx: hid_reader::Context) {
         (ctx.shared.usb_device, ctx.shared.usb_keyboard).lock(|usb_device, usb_keyboard| {
             if usb_device.poll(&mut [usb_keyboard]) {
@@ -454,7 +451,7 @@ mod kb {
                     core::panic!("Failed to process keyboard tick: {:?}", e)
                 }
             });
-            Timer::delay(1.millis()).await;
+            Mono::delay(1.millis()).await;
         }
     }
 
@@ -502,8 +499,8 @@ mod kb {
             .map(|x| x * diff)
             .map(|x| if from < to { from + x } else { from - x })
         {
-            Timer::delay(delay_ms.millis()).await;
-            channel.set_duty(d);
+            Mono::delay(delay_ms.millis()).await;
+            channel.set_duty_cycle(d).unwrap();
         }
     }
 }

@@ -1,15 +1,15 @@
 pub mod animation;
 
-extern crate alloc;
 use alloc::{boxed::Box, vec::Vec};
 use animation::{BreatheAnimation, NoneAnimation, ScanAnimation, WheelAnimation};
-
 use core::ops::Mul;
-use rtic_monotonics::{rp2040::*, Monotonic};
+use hal::timer::Instant;
+use rtic_monotonics::{rp2040::prelude::*, Monotonic};
 use rtic_sync::channel::{Receiver, Sender};
 use smart_leds::{brightness, SmartLedsWrite, RGB8 as SLRGB8};
 
 use crate::{
+    kb::Mono,
     key::{Action, Control, LayerIndex},
     matrix::Edge,
     processor::{Event, EventsProcessor, Result},
@@ -19,7 +19,7 @@ use crate::{
 const LED_MAX_BRIGHTNESS: u8 = 28;
 
 const FRAME_TIME_MIN_MICROS: u64 = 1_000;
-const FRAME_TIME_DEFAULT_MICROS: u64 = 20_000;
+const FRAME_TIME_DEFAULT_MICROS: u64 = 10_000;
 const FRAME_TIME_MAX_MICROS: u64 = 1_000_000;
 
 type RGB8 = SLRGB8;
@@ -84,7 +84,7 @@ pub struct RGBProcessor<const LED_COUNT: usize> {
     animations: [Box<dyn AnimationIterator<{ LED_COUNT }, Item = Box<dyn FrameIterator>>>; 4],
     animation_idx: usize,
     frame_sender: Sender<'static, Box<dyn FrameIterator>, 1>,
-    last_render: <rtic_monotonics::rp2040::Timer as Monotonic>::Instant,
+    last_render: Instant,
     frame_time_micros: u64,
     brightness: u8,
 }
@@ -94,14 +94,14 @@ impl<const LED_COUNT: usize> RGBProcessor<{ LED_COUNT }> {
     pub fn new(frame_sender: Sender<'static, Box<dyn FrameIterator>, 1>) -> Self {
         return RGBProcessor {
             animations: [
-                Box::new(WheelAnimation::new(Default::default())),
                 Box::new(BreatheAnimation::new(Default::default())),
+                Box::new(WheelAnimation::new(Default::default())),
                 Box::new(ScanAnimation::new(Default::default())),
                 Box::new(NoneAnimation::new()),
             ],
             animation_idx: 0,
             frame_sender,
-            last_render: Timer::now(),
+            last_render: Mono::now(),
             frame_time_micros: FRAME_TIME_DEFAULT_MICROS,
             brightness: 255,
         };
@@ -155,7 +155,7 @@ impl<const LED_COUNT: usize, L: LayerIndex> EventsProcessor<L> for RGBProcessor<
             }
         });
 
-        match Timer::now().checked_duration_since(self.last_render) {
+        match Mono::now().checked_duration_since(self.last_render) {
             Some(d) if d > self.frame_time_micros.micros::<1, 1_000_000>() => {
                 self.frame_sender
                     .try_send(Box::new(brightness(
@@ -163,7 +163,7 @@ impl<const LED_COUNT: usize, L: LayerIndex> EventsProcessor<L> for RGBProcessor<
                         self.brightness,
                     )))
                     .ok();
-                self.last_render = Timer::now();
+                self.last_render = Mono::now();
             }
             _ => {}
         };

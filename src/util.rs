@@ -1,5 +1,7 @@
-use embedded_hal::digital::v2::OutputPin;
-use rtic_monotonics::rp2040::*;
+use embedded_hal::digital::OutputPin;
+use rtic_monotonics::rp2040::prelude::*;
+
+use crate::kb::Mono;
 
 #[allow(dead_code)]
 pub async fn halt_blink<P: OutputPin + ?Sized>(led: &mut P, us: u32) -> Result<(), P::Error> {
@@ -18,5 +20,5 @@ pub async fn halt_blink<P: OutputPin + ?Sized>(led: &mut P, us: u32) -> Result<(
 
 #[allow(dead_code)]
 pub async fn halt(us: u64) {
-    Timer::delay(us.micros()).await;
+    Mono::delay(us.micros()).await;
 }
