@@ -115,6 +115,8 @@ pub enum Key {
     LeftArrow,
     DownArrow,
     RightArrow,
+    VolumeUp,
+    VolumeDown,
 }
 
 impl Into<Keyboard> for Key {
@@ -203,6 +205,8 @@ impl Into<Keyboard> for Key {
             Key::LeftArrow => Keyboard::LeftArrow,
             Key::DownArrow => Keyboard::DownArrow,
             Key::RightArrow => Keyboard::RightArrow,
+            Key::VolumeUp => Keyboard::VolumeUp,
+            Key::VolumeDown => Keyboard::VolumeDown,
         }
     }
 }
@@ -220,3 +224,22 @@ pub enum Control {
 }
 
 pub trait LayerIndex: Copy + Into<usize> + Format {}
+
+#[derive(Clone, Copy, Debug, Format, PartialEq)]
+pub enum Edge {
+    None,
+    Rising,
+    Falling,
+}
+
+impl From<(bool, bool)> for Edge {
+    fn from((from, to): (bool, bool)) -> Self {
+        if !from && to {
+            Edge::Rising
+        } else if from && !to {
+            Edge::Falling
+        } else {
+            Edge::None
+        }
+    }
+}
