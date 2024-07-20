@@ -1,18 +1,20 @@
-pub mod bitmap;
 pub mod events;
-pub mod keymap;
+pub mod input;
+pub mod mapper;
 
 use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
 use core::{error, fmt, result};
+use mapper::Input;
 
 use crate::{
+    key::Edge,
     key::{Action, LayerIndex},
-    matrix::{Bitmap, Edge},
 };
 
+#[allow(dead_code)]
 pub struct Event<L: LayerIndex> {
     pub time_ticks: u64,
     pub i: usize,
@@ -21,8 +23,8 @@ pub struct Event<L: LayerIndex> {
     pub action: Action<L>,
 }
 
-pub trait BitmapProcessor<const ROW_COUNT: usize, const COL_COUNT: usize> {
-    fn process(&mut self, bitmap: &mut Bitmap<ROW_COUNT, COL_COUNT>) -> Result;
+pub trait InputProcessor<const KEY_MATRIX_ROW_COUNT: usize, const KEY_MATRIX_COL_COUNT: usize> {
+    fn process(&mut self, input: &mut Input<KEY_MATRIX_ROW_COUNT, KEY_MATRIX_COL_COUNT>) -> Result;
 }
 
 pub trait EventsProcessor<L: LayerIndex> {

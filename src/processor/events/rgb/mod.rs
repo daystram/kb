@@ -10,8 +10,8 @@ use smart_leds::{brightness, SmartLedsWrite, RGB8 as SLRGB8};
 
 use crate::{
     kb::Mono,
+    key::Edge,
     key::{Action, Control, LayerIndex},
-    matrix::Edge,
     processor::{Event, EventsProcessor, Result},
 };
 

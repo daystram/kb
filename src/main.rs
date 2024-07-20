@@ -47,33 +47,33 @@ mod kb {
     };
 
     use crate::{
-        config::{self, Layer, KEY_MAP},
+        config,
         key::{Action, Key},
-        matrix::{BasicVerticalSwitchMatrix, Bitmap, Scanner},
+        matrix::{BasicVerticalSwitchMatrix, Scanner},
         processor::{
-            bitmap::debounce::KeyRisingFallingDebounceProcessor,
             events::rgb::{FrameIterator, RGBMatrix, RGBProcessor},
-            keymap::KeyMapper,
-            BitmapProcessor, Event, EventsProcessor,
+            input::debounce::KeyMatrixRisingFallingDebounceProcessor,
+            mapper::{Input, Mapper},
+            Event, EventsProcessor, InputProcessor,
         },
     };
 
     const XOSC_CRYSTAL_FREQ: u32 = 12_000_000;
     const MAX_PWM_POWER: u16 = 0x6000; // max: 0x8000
 
-    const BITMAP_CHANNEL_BUFFER_SIZE: usize = 1;
+    const INPUT_CHANNEL_BUFFER_SIZE: usize = 1;
     const KEYS_CHANNEL_BUFFER_SIZE: usize = 1;
 
-    const MATRIX_SCANNER_TARGET_POLL_FREQ: u64 = 1000;
+    const INPUT_SCANNER_TARGET_POLL_FREQ: u64 = 1000;
     const HID_REPORTER_TARGET_POLL_FREQ: u64 = 1000;
-    const MATRIX_SCANNER_TARGET_POLL_PERIOD_MICROS: u64 =
-        1_000_000u64 / MATRIX_SCANNER_TARGET_POLL_FREQ;
+    const INPUT_SCANNER_TARGET_POLL_PERIOD_MICROS: u64 =
+        1_000_000u64 / INPUT_SCANNER_TARGET_POLL_FREQ;
     const HID_REPORTER_TARGET_POLL_PERIOD_MICROS: u64 =
         1_000_000u64 / HID_REPORTER_TARGET_POLL_FREQ;
 
-    const DEBUG_LOG_MATRIX_SCANNER_ENABLE_TIMING: bool = true;
-    const DEBUG_LOG_MATRIX_SCANNER_INTERVAL: u64 = 50;
-    const DEBUG_LOG_STREAM_PROCESSOR_ENABLE_TIMING: bool = true;
+    const DEBUG_LOG_INPUT_SCANNER_ENABLE_TIMING: bool = false;
+    const DEBUG_LOG_INPUT_SCANNER_INTERVAL: u64 = 50;
+    const DEBUG_LOG_STREAM_PROCESSOR_ENABLE_TIMING: bool = false;
     const DEBUG_LOG_STREAM_PROCESSOR_INTERVAL: u64 = 50;
     const DEBUG_LOG_SENT_KEYS: bool = false;
 
@@ -89,7 +89,10 @@ mod kb {
 
     #[local]
     struct Local {
-        switch_matrix: BasicVerticalSwitchMatrix<{ config::ROW_COUNT }, { config::COL_COUNT }>,
+        switch_matrix: BasicVerticalSwitchMatrix<
+            { config::KEY_MATRIX_ROW_COUNT },
+            { config::KEY_MATRIX_COL_COUNT },
+        >,
     }
 
     #[init(local = [usb_allocator: Option<UsbBusAllocator<usb::UsbBus>> = None])]
@@ -183,10 +186,9 @@ mod kb {
         heartbeat::spawn(pwm_channel).ok();
 
         // Init channels
-        let (bitmap_sender, bitmap_receiver) = rtic_sync::make_channel!(Bitmap<{config::ROW_COUNT}, {config::COL_COUNT}>, BITMAP_CHANNEL_BUFFER_SIZE);
+        let (input_sender, input_receiver) = rtic_sync::make_channel!(Input<{config::KEY_MATRIX_ROW_COUNT}, {config::KEY_MATRIX_COL_COUNT}>, INPUT_CHANNEL_BUFFER_SIZE);
         let (keys_sender, keys_receiver) =
             rtic_sync::make_channel!(Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE);
-
         let (frame_sender, frame_receiver) = rtic_sync::make_channel!(Box<dyn FrameIterator>, 1);
 
         // Init switch matrix
@@ -234,12 +236,12 @@ mod kb {
         rgb_matrix_renderer::spawn(ws, frame_receiver).ok();
 
         // Init matrix scanner
-        debug!("spawn matrix_scanner");
-        matrix_scanner::spawn(bitmap_sender).ok();
+        debug!("spawn input_scanner");
+        input_scanner::spawn(input_sender).ok();
 
         // Init stream processor
         debug!("spawn stream_processor");
-        stream_processor::spawn(bitmap_receiver, keys_sender, frame_sender).ok();
+        stream_processor::spawn(input_receiver, keys_sender, frame_sender).ok();
 
         // Init HID reporter
         debug!("spawn hid_reporter");
@@ -271,40 +273,41 @@ mod kb {
     }
 
     #[task (local=[switch_matrix], priority = 1)]
-    async fn matrix_scanner(
-        ctx: matrix_scanner::Context,
-        mut bitmap_sender: Sender<
+    async fn input_scanner(
+        ctx: input_scanner::Context,
+        mut input_sender: Sender<
             'static,
-            Bitmap<{ config::ROW_COUNT }, { config::COL_COUNT }>,
-            BITMAP_CHANNEL_BUFFER_SIZE,
+            Input<{ config::KEY_MATRIX_ROW_COUNT }, { config::KEY_MATRIX_COL_COUNT }>,
+            INPUT_CHANNEL_BUFFER_SIZE,
         >,
     ) {
-        info!("matrix_scanner()");
+        info!("input_scanner()");
         let mut poll_end_time = Mono::now();
         let mut n: u64 = 0;
         loop {
             let scan_start_time = Mono::now();
-            let bitmap = ctx.local.switch_matrix.scan().await;
+            input_sender
+                .try_send(Input {
+                    key_matrix_result: ctx.local.switch_matrix.scan().await,
+                })
+                .ok(); // drop data if buffer is full
 
-            bitmap_sender.try_send(bitmap).ok(); // drop data if buffer is full
-
-            if DEBUG_LOG_MATRIX_SCANNER_ENABLE_TIMING && n % DEBUG_LOG_MATRIX_SCANNER_INTERVAL == 0
-            {
+            if DEBUG_LOG_INPUT_SCANNER_ENABLE_TIMING && n % DEBUG_LOG_INPUT_SCANNER_INTERVAL == 0 {
                 let scan_end_time = Mono::now();
                 debug!(
-                    "[{}] matrix_scanner: {} us\tpoll: {} us\trate: {} Hz\t budget: {} %",
+                    "[{}] input_scanner: {} us\tpoll: {} us\trate: {} Hz\t budget: {} %",
                     n,
                     (scan_end_time - scan_start_time).to_micros(),
                     (scan_end_time - poll_end_time).to_micros(),
                     1_000_000u64 / (scan_end_time - poll_end_time).to_micros(),
                     (scan_end_time - scan_start_time).to_micros() * 100
-                        / MATRIX_SCANNER_TARGET_POLL_PERIOD_MICROS
+                        / INPUT_SCANNER_TARGET_POLL_PERIOD_MICROS
                 );
             }
 
             poll_end_time = Mono::now();
             n = n.wrapping_add(1);
-            Mono::delay_until(scan_start_time + MATRIX_SCANNER_TARGET_POLL_PERIOD_MICROS.micros())
+            Mono::delay_until(scan_start_time + INPUT_SCANNER_TARGET_POLL_PERIOD_MICROS.micros())
                 .await;
         }
     }
@@ -312,39 +315,41 @@ mod kb {
     #[task(priority = 2)]
     async fn stream_processor(
         _: stream_processor::Context,
-        mut bitmap_receiver: Receiver<
+        mut input_receiver: Receiver<
             'static,
-            Bitmap<{ config::ROW_COUNT }, { config::COL_COUNT }>,
-            BITMAP_CHANNEL_BUFFER_SIZE,
+            Input<{ config::KEY_MATRIX_ROW_COUNT }, { config::KEY_MATRIX_COL_COUNT }>,
+            INPUT_CHANNEL_BUFFER_SIZE,
         >,
         mut keys_sender: Sender<'static, Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE>,
         frame_sender: Sender<'static, Box<dyn FrameIterator>, 1>,
     ) {
         info!("stream_processor()");
-        let bitmap_processors: &mut [&mut dyn BitmapProcessor<
-            { config::ROW_COUNT },
-            { config::COL_COUNT },
-        >] = &mut [&mut KeyRisingFallingDebounceProcessor::new(10.millis())];
-        let mut mapper = KeyMapper::new(KEY_MAP);
-        let events_processors: &mut [&mut dyn EventsProcessor<Layer>] =
+        let input_processors: &mut [&mut dyn InputProcessor<
+            { config::KEY_MATRIX_ROW_COUNT },
+            { config::KEY_MATRIX_COL_COUNT },
+        >] = &mut [&mut KeyMatrixRisingFallingDebounceProcessor::new(
+            10.millis(),
+        )];
+        let mut mapper = Mapper::new(config::build_input_map());
+        let events_processors: &mut [&mut dyn EventsProcessor<config::Layer>] =
             &mut [&mut RGBProcessor::<{ config::LED_COUNT }>::new(
                 frame_sender,
             )];
 
         let mut poll_end_time = Mono::now();
         let mut n: u64 = 0;
-        while let Ok(mut bitmap) = bitmap_receiver.recv().await {
+        while let Ok(mut input) = input_receiver.recv().await {
             let process_start_time = Mono::now();
-            match bitmap_processors
+            match input_processors
                 .iter_mut()
-                .try_for_each(|p| p.process(&mut bitmap))
+                .try_for_each(|p| p.process(&mut input))
             {
                 Err(_) => continue,
                 _ => {}
             }
 
-            let mut events = Vec::<Event<Layer>>::with_capacity(10);
-            mapper.map(&bitmap, &mut events);
+            let mut events = Vec::<Event<config::Layer>>::with_capacity(10);
+            mapper.map(&input, &mut events);
 
             match events_processors
                 .iter_mut()
@@ -377,7 +382,7 @@ mod kb {
                     (scan_end_time - poll_end_time).to_micros(),
                     1_000_000u64 / (scan_end_time - poll_end_time).to_micros(),
                     (scan_end_time - process_start_time).to_micros() * 100
-                        / MATRIX_SCANNER_TARGET_POLL_PERIOD_MICROS
+                        / INPUT_SCANNER_TARGET_POLL_PERIOD_MICROS
                 );
             }
 
