@@ -1,14 +1,17 @@
 use alloc::vec::Vec;
+use enum_map::EnumMap;
 
 use crate::{
     key::{Action, Edge, LayerIndex},
     matrix::Result as MatrixResult,
+    rotary::{Direction, Result as RotaryResult},
 };
 
 use super::Event;
 
 pub struct Input<const KEY_MATRIX_ROW_COUNT: usize, const KEY_MATRIX_COL_COUNT: usize> {
     pub key_matrix_result: MatrixResult<KEY_MATRIX_ROW_COUNT, KEY_MATRIX_COL_COUNT>,
+    pub rotary_encoder_result: RotaryResult,
 }
 
 pub struct InputMap<
@@ -18,6 +21,7 @@ pub struct InputMap<
     L: LayerIndex,
 > {
     key_matrix: [[[Action<L>; KEY_MATRIX_COL_COUNT]; KEY_MATRIX_ROW_COUNT]; LAYER_COUNT],
+    rotary_encoder: [EnumMap<Direction, Action<L>>; LAYER_COUNT],
 }
 
 impl<
@@ -29,8 +33,12 @@ impl<
 {
     pub const fn new(
         key_matrix: [[[Action<L>; KEY_MATRIX_COL_COUNT]; KEY_MATRIX_ROW_COUNT]; LAYER_COUNT],
+        rotary_encoder: [EnumMap<Direction, Action<L>>; LAYER_COUNT],
     ) -> Self {
-        return InputMap { key_matrix };
+        return InputMap {
+            key_matrix,
+            rotary_encoder,
+        };
     }
 }
 
@@ -105,6 +113,15 @@ impl<
                 }
             }
         }
+
+        // map rotary encoder
+        provisional_events.push(Event {
+            time_ticks: input.rotary_encoder_result.scan_time_ticks,
+            i: 0,
+            j: 0,
+            edge: input.rotary_encoder_result.edge,
+            action: self.mapping.rotary_encoder[layer_idx][input.rotary_encoder_result.direction],
+        });
 
         *events = provisional_events;
         self.previous_key_matrix_result = input.key_matrix_result;

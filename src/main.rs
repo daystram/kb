@@ -7,6 +7,7 @@ mod config;
 mod key;
 mod matrix;
 mod processor;
+mod rotary;
 mod util;
 
 extern crate alloc;
@@ -56,6 +57,7 @@ mod kb {
             mapper::{Input, Mapper},
             Event, EventsProcessor, InputProcessor,
         },
+        rotary::{Mode, RotaryEncoder},
     };
 
     const XOSC_CRYSTAL_FREQ: u32 = 12_000_000;
@@ -93,6 +95,7 @@ mod kb {
             { config::KEY_MATRIX_ROW_COUNT },
             { config::KEY_MATRIX_COL_COUNT },
         >,
+        rotary_encoder: RotaryEncoder,
     }
 
     #[init(local = [usb_allocator: Option<UsbBusAllocator<usb::UsbBus>> = None])]
@@ -220,6 +223,15 @@ mod kb {
             ],
         );
 
+        // Init rotary encoder
+        #[rustfmt::skip]
+        let rotary_encoder = RotaryEncoder::new(
+            Box::new(pins.gpio15.into_pull_up_input()),
+            Box::new(pins.gpio17.into_pull_up_input()),
+            Box::new(pins.gpio16.into_push_pull_output()),
+            Mode::DentHighPrecision,
+        );
+
         // Init LED matrix
         let (mut pio0, sm0, _, _, _) = ctx.device.PIO0.split(&mut ctx.device.RESETS);
         let ws: ws2812_pio::Ws2812Direct<
@@ -259,7 +271,10 @@ mod kb {
                 usb_device,
                 usb_keyboard,
             },
-            Local { switch_matrix },
+            Local {
+                switch_matrix,
+                rotary_encoder,
+            },
         )
     }
 
@@ -272,7 +287,7 @@ mod kb {
         }
     }
 
-    #[task (local=[switch_matrix], priority = 1)]
+    #[task (local=[switch_matrix, rotary_encoder], priority = 1)]
     async fn input_scanner(
         ctx: input_scanner::Context,
         mut input_sender: Sender<
@@ -289,6 +304,7 @@ mod kb {
             input_sender
                 .try_send(Input {
                     key_matrix_result: ctx.local.switch_matrix.scan().await,
+                    rotary_encoder_result: ctx.local.rotary_encoder.scan(),
                 })
                 .ok(); // drop data if buffer is full
 
