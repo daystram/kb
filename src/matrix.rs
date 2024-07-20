@@ -1,12 +1,10 @@
-extern crate alloc;
 use alloc::boxed::Box;
 use defmt::Format;
-
-use embedded_hal::digital::v2::{InputPin, OutputPin};
+use embedded_hal::digital::{InputPin, OutputPin};
 use rp2040_hal::gpio;
-use rtic_monotonics::{rp2040::*, Monotonic};
+use rtic_monotonics::rp2040::prelude::*;
 
-use crate::util::halt;
+use crate::{kb::Mono, util::halt};
 
 #[derive(Clone, Copy, Debug, Format, PartialEq)]
 pub enum Edge {
@@ -83,7 +81,7 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, COL_COUN
         let mut bitmap = Bitmap::default();
         for (j, col) in self.cols.iter_mut().enumerate() {
             col.set_high().unwrap();
-            for (i, row) in self.rows.iter().enumerate() {
+            for (i, row) in self.rows.iter_mut().enumerate() {
                 let pressed = row.is_high().unwrap();
                 bitmap.matrix[i][j] = Bit {
                     edge: Edge::from((self.previous_bitmap.matrix[i][j].pressed, pressed)),
@@ -93,7 +91,7 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, COL_COUN
             col.set_low().unwrap();
             halt(1).await;
         }
-        bitmap.scan_time_ticks = Timer::now().ticks();
+        bitmap.scan_time_ticks = Mono::now().ticks();
         self.previous_bitmap = bitmap;
         return bitmap;
     }
@@ -128,7 +126,7 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, COL_COUN
         let mut bitmap = Bitmap::default();
         for (i, row) in self.rows.iter_mut().enumerate() {
             row.set_high().unwrap();
-            for (j, col) in self.cols.iter().enumerate() {
+            for (j, col) in self.cols.iter_mut().enumerate() {
                 let pressed = col.is_high().unwrap();
                 bitmap.matrix[i][j] = Bit {
                     edge: Edge::from((self.previous_bitmap.matrix[i][j].pressed, pressed)),

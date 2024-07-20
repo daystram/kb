@@ -1,13 +1,14 @@
 use defmt::Format;
-use rtic_monotonics::{rp2040::*, Monotonic};
+use rtic_monotonics::Monotonic;
 
 use crate::{
+    kb::Mono,
     matrix::{Bitmap, Edge},
     processor::{BitmapProcessor, Result},
 };
 
 pub struct KeyRisingFallingDebounceProcessor<const ROW_COUNT: usize, const COL_COUNT: usize> {
-    delay: <Timer as Monotonic>::Duration,
+    delay: <Mono as Monotonic>::Duration,
     previous_states: [[State; COL_COUNT]; ROW_COUNT],
 }
 
@@ -21,7 +22,7 @@ struct State {
 impl<const ROW_COUNT: usize, const COL_COUNT: usize>
     KeyRisingFallingDebounceProcessor<ROW_COUNT, COL_COUNT>
 {
-    pub fn new(delay: <Timer as Monotonic>::Duration) -> Self {
+    pub fn new(delay: <Mono as Monotonic>::Duration) -> Self {
         return KeyRisingFallingDebounceProcessor {
             delay,
             previous_states: [[State {
