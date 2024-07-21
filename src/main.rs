@@ -3,6 +3,7 @@
 #![feature(type_alias_impl_trait)]
 #![feature(associated_type_defaults)]
 #![feature(trait_alias)]
+mod heartbeat;
 mod key;
 mod keyboard;
 mod matrix;
