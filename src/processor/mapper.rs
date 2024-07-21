@@ -35,10 +35,10 @@ impl<
         key_matrix: [[[Action<L>; KEY_MATRIX_COL_COUNT]; KEY_MATRIX_ROW_COUNT]; LAYER_COUNT],
         rotary_encoder: [EnumMap<Direction, Action<L>>; LAYER_COUNT],
     ) -> Self {
-        return InputMap {
+        InputMap {
             key_matrix,
             rotary_encoder,
-        };
+        }
     }
 }
 
@@ -62,10 +62,10 @@ impl<
     pub fn new(
         mapping: InputMap<LAYER_COUNT, KEY_MATRIX_ROW_COUNT, KEY_MATRIX_COL_COUNT, L>,
     ) -> Self {
-        return Mapper {
+        Mapper {
             previous_key_matrix_result: MatrixResult::default(),
             mapping,
-        };
+        }
     }
 }
 
@@ -101,6 +101,7 @@ impl<
                         }
                     }
                     // push non-idling event
+                    #[allow(clippy::nonminimal_bool)]
                     if !(bit.edge == Edge::None && !bit.pressed) {
                         provisional_events.push(Event {
                             time_ticks: input.key_matrix_result.scan_time_ticks,

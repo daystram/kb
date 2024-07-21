@@ -41,9 +41,9 @@ pub struct Error {
 #[allow(dead_code)]
 impl Error {
     pub fn new(msg: &str) -> Self {
-        return Error {
+        Error {
             msg: msg.to_string(),
-        };
+        }
     }
 }
 

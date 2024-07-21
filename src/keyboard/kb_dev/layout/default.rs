@@ -14,8 +14,9 @@ use crate::{
 
 pub const LAYER_COUNT: usize = 3;
 
-#[derive(Clone, Copy, PartialEq, PartialOrd, Format)]
+#[derive(Clone, Copy, Default, Format, PartialEq, PartialOrd)]
 pub enum Layer {
+    #[default]
     Base,
     Function1,
     Function2,
@@ -23,21 +24,15 @@ pub enum Layer {
 
 impl LayerIndex for Layer {}
 
-impl Into<usize> for Layer {
-    fn into(self) -> usize {
-        self as usize
-    }
-}
-
-impl Default for Layer {
-    fn default() -> Self {
-        return Layer::Base;
+impl From<Layer> for usize {
+    fn from(value: Layer) -> usize {
+        value as usize
     }
 }
 
 #[rustfmt::skip]
 pub fn get_input_map() -> InputMap<{ <super::super::Keyboard as KeyboardConfiguration>::LAYER_COUNT }, { <super::super::Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT }, { <super::super::Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT }, <super::super::Keyboard as KeyboardConfiguration>::Layer> {
-    return InputMap::new(
+    InputMap::new(
         [
             [
                 [K(Key::Escape), K(Key::Keyboard1), K(Key::Keyboard2), K(Key::Keyboard3), K(Key::Keyboard4), K(Key::Keyboard5), K(Key::Keyboard6), K(Key::Keyboard7), K(Key::Keyboard8), K(Key::Keyboard9), K(Key::Keyboard0), K(Key::Minus), K(Key::Equal), K(Key::DeleteBackspace), K(Key::DeleteForward)],
@@ -78,5 +73,5 @@ pub fn get_input_map() -> InputMap<{ <super::super::Keyboard as KeyboardConfigur
                 _ => ___________,
             },
         ],
-    );
+    )
 }

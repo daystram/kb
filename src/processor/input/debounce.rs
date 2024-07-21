@@ -26,13 +26,13 @@ impl<const KEY_MATRIX_ROW_COUNT: usize, const KEY_MATRIX_COL_COUNT: usize>
     KeyMatrixRisingFallingDebounceProcessor<KEY_MATRIX_ROW_COUNT, KEY_MATRIX_COL_COUNT>
 {
     pub fn new(delay: <Mono as Monotonic>::Duration) -> Self {
-        return KeyMatrixRisingFallingDebounceProcessor {
+        KeyMatrixRisingFallingDebounceProcessor {
             delay,
             previous_states: [[State {
                 pressed_ticks: 0,
                 pressed: false,
             }; KEY_MATRIX_COL_COUNT]; KEY_MATRIX_ROW_COUNT],
-        };
+        }
     }
 }
 
@@ -52,17 +52,15 @@ impl<const KEY_MATRIX_ROW_COUNT: usize, const KEY_MATRIX_COL_COUNT: usize>
                         bit.edge = Edge::None;
                         bit.pressed = previous_state.pressed;
                     }
-                } else {
-                    if bit.edge == Edge::Rising || bit.edge == Edge::Falling {
-                        // update previous_state
-                        *previous_state = State {
-                            pressed_ticks: input.key_matrix_result.scan_time_ticks,
-                            pressed: bit.pressed,
-                        };
-                    }
+                } else if bit.edge == Edge::Rising || bit.edge == Edge::Falling {
+                    // update previous_state
+                    *previous_state = State {
+                        pressed_ticks: input.key_matrix_result.scan_time_ticks,
+                        pressed: bit.pressed,
+                    };
                 }
             }
         }
-        return Ok(());
+        Ok(())
     }
 }

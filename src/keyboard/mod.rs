@@ -62,7 +62,7 @@ pub trait KeyboardConfiguration {
         { selected_keyboard::Keyboard::KEY_MATRIX_COL_COUNT },
         selected_keyboard::layout::Layer,
     > {
-        return selected_keyboard::layout::get_input_map();
+        selected_keyboard::layout::get_input_map()
     }
 }
 

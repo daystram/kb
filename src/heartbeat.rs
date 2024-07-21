@@ -12,7 +12,7 @@ pub struct HeartbeatLED {
 
 impl HeartbeatLED {
     pub fn new(pin: Box<dyn SetDutyCycle<Error = gpio::Error>>) -> Self {
-        return HeartbeatLED { pin };
+        HeartbeatLED { pin }
     }
 
     pub async fn cycle(&mut self) {

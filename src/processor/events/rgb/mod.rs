@@ -42,7 +42,7 @@ where
     W::Color: From<RGB8>,
 {
     pub fn new(writer: W) -> Self {
-        return RGBMatrix { writer };
+        RGBMatrix { writer }
     }
 
     pub async fn render(
@@ -92,7 +92,7 @@ pub struct RGBProcessor<const LED_COUNT: usize> {
 #[allow(dead_code)]
 impl<const LED_COUNT: usize> RGBProcessor<{ LED_COUNT }> {
     pub fn new(frame_sender: Sender<'static, Box<dyn FrameIterator>, 1>) -> Self {
-        return RGBProcessor {
+        RGBProcessor {
             animations: [
                 Box::new(BreatheAnimation::new(Default::default())),
                 Box::new(WheelAnimation::new(Default::default())),
@@ -104,16 +104,16 @@ impl<const LED_COUNT: usize> RGBProcessor<{ LED_COUNT }> {
             last_render: Mono::now(),
             frame_time_micros: FRAME_TIME_DEFAULT_MICROS,
             brightness: 255,
-        };
+        }
     }
 }
 
 impl<const LED_COUNT: usize, L: LayerIndex> EventsProcessor<L> for RGBProcessor<{ LED_COUNT }> {
     fn process(&mut self, events: &mut Vec<Event<L>>) -> Result {
-        events.into_iter().for_each(|e| {
+        events.iter_mut().for_each(|e| {
             if e.edge == Edge::Rising {
-                match e.action {
-                    Action::Control(k) => match k {
+                if let Action::Control(k) = e.action {
+                    match k {
                         Control::RGBAnimationPrevious => {
                             self.animation_idx = if self.animation_idx == 0 {
                                 self.animations.len() - 1
@@ -149,8 +149,7 @@ impl<const LED_COUNT: usize, L: LayerIndex> EventsProcessor<L> for RGBProcessor<
                         }
 
                         _ => {}
-                    },
-                    _ => {}
+                    }
                 }
             }
         });

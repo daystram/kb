@@ -22,7 +22,7 @@ pub struct ScanAnimation<const LED_COUNT: usize> {
 
 impl<const LED_COUNT: usize> ScanAnimation<LED_COUNT> {
     pub fn new(animation_state: AnimationState<LED_COUNT>) -> Self {
-        return Self { animation_state };
+        ScanAnimation { animation_state }
     }
 }
 
@@ -46,16 +46,17 @@ pub struct BreatheAnimation<const LED_COUNT: usize> {
 
 impl<const LED_COUNT: usize> BreatheAnimation<LED_COUNT> {
     pub fn new(animation_state: AnimationState<LED_COUNT>) -> Self {
-        return Self { animation_state };
+        BreatheAnimation { animation_state }
     }
 
+    #[allow(clippy::assign_op_pattern)]
     fn breathe(mut t: u8) -> RGB8 {
         if t < 128 {
             t = t * 2;
         } else {
             t = (255 - t) * 2;
         }
-        return (t, t, t).into();
+        (t, t, t).into()
     }
 }
 
@@ -79,18 +80,18 @@ pub struct WheelAnimation<const LED_COUNT: usize> {
 
 impl<const LED_COUNT: usize> WheelAnimation<LED_COUNT> {
     pub fn new(animation_state: AnimationState<LED_COUNT>) -> Self {
-        return Self { animation_state };
+        WheelAnimation { animation_state }
     }
 
     fn wheel(mut rot: u8) -> RGB8 {
         if rot < 85 {
-            return (0, 255 - (rot * 3), rot * 3).into();
+            (0, 255 - (rot * 3), rot * 3).into()
         } else if rot < 170 {
             rot -= 85;
-            return (rot * 3, 0, 255 - (rot * 3)).into();
+            (rot * 3, 0, 255 - (rot * 3)).into()
         } else {
             rot -= 170;
-            return (255 - (rot * 3), rot * 3, 0).into();
+            (255 - (rot * 3), rot * 3, 0).into()
         }
     }
 }
