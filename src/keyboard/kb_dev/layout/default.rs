@@ -1,23 +1,18 @@
-use defmt::Format;
+#![allow(dead_code)]
 use enum_map::enum_map;
 
 use crate::{
     key::{
         Action::{Control as C, Key as K, LayerModifier as LM, Pass as ___________},
-        Control, Key, LayerIndex,
+        Control, Key,
     },
+    keyboard::{Layer, KEY_MATRIX_COL_COUNT, KEY_MATRIX_ROW_COUNT, LAYER_COUNT},
     processor::mapper::InputMap,
     rotary::Direction,
 };
 
-pub const LAYER_COUNT: usize = 3;
-pub const KEY_MATRIX_ROW_COUNT: usize = 5;
-pub const KEY_MATRIX_COL_COUNT: usize = 15;
-
-pub const LED_COUNT: usize = 67;
-
 #[rustfmt::skip]
-pub fn build_input_map(
+pub fn get_input_map(
 ) -> InputMap<{ LAYER_COUNT }, { KEY_MATRIX_ROW_COUNT }, { KEY_MATRIX_COL_COUNT }, Layer> {
     return InputMap::new(
         [
@@ -61,20 +56,4 @@ pub fn build_input_map(
             },
         ],
     );
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Copy, PartialEq, PartialOrd, Format)]
-pub enum Layer {
-    Base,
-    Function1,
-    Function2,
-}
-
-impl LayerIndex for Layer {}
-
-impl Into<usize> for Layer {
-    fn into(self) -> usize {
-        self as usize
-    }
 }

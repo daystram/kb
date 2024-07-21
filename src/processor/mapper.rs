@@ -84,18 +84,18 @@ impl<
         // map key matrix
         let mut provisional_events = Vec::<Event<L>>::with_capacity(10);
         let mut new_layer = true;
-        let mut layer_idx = 0;
+        let mut layer = L::default();
         while new_layer {
             provisional_events.clear();
             new_layer = false;
             for (i, row) in input.key_matrix_result.matrix.iter().enumerate() {
                 for (j, bit) in row.iter().enumerate() {
-                    let action = self.mapping.key_matrix[layer_idx][i][j];
+                    let action = self.mapping.key_matrix[layer.into()][i][j];
                     if bit.pressed {
                         if let Action::LayerModifier(l) = action {
-                            if layer_idx < l.into() {
+                            if layer < l {
                                 new_layer = true;
-                                layer_idx = l.into();
+                                layer = l;
                                 break; // repeat resolving on the next layer
                             }
                         }
@@ -120,7 +120,8 @@ impl<
             i: 0,
             j: 0,
             edge: input.rotary_encoder_result.edge,
-            action: self.mapping.rotary_encoder[layer_idx][input.rotary_encoder_result.direction],
+            action: self.mapping.rotary_encoder[layer.into()]
+                [input.rotary_encoder_result.direction],
         });
 
         *events = provisional_events;
