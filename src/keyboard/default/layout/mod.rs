@@ -1,6 +1,10 @@
-#[cfg(any(layout = "default"))]
+#[cfg(layout = "default")]
 mod default;
 #[cfg(layout = "default")]
 use default as selected_layout;
+
+pub use selected_layout::LAYER_COUNT;
+
+pub use selected_layout::Layer;
 
 pub use selected_layout::get_input_map;

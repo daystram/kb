@@ -34,10 +34,9 @@ mod kb {
 
     use hal::{
         clocks::init_clocks_and_plls,
-        gpio, pac, pio,
-        prelude::*,
-        pwm::{self, Channel},
-        sio, usb, Sio, Watchdog,
+        gpio, pac,
+        pio::{self, PIOExt},
+        pwm, sio, usb, Clock, Sio, Watchdog,
     };
 
     use rtic_monotonics::rp2040::prelude::*;
@@ -52,8 +51,9 @@ mod kb {
     };
 
     use crate::{
+        heartbeat::HeartbeatLED,
         key::{Action, Key},
-        keyboard,
+        keyboard::{Keyboard, KeyboardConfiguration},
         matrix::{BasicVerticalSwitchMatrix, Scanner},
         processor::{
             events::rgb::{FrameIterator, RGBMatrix, RGBProcessor},
@@ -61,12 +61,10 @@ mod kb {
             mapper::{Input, Mapper},
             Event, EventsProcessor, InputProcessor,
         },
-        rotary::{Mode, RotaryEncoder},
-        util,
+        rotary::RotaryEncoder,
     };
 
     const XOSC_CRYSTAL_FREQ: u32 = 12_000_000;
-    const MAX_PWM_POWER: u16 = 0x6000; // max: 0x8000
 
     const INPUT_CHANNEL_BUFFER_SIZE: usize = 1;
     const KEYS_CHANNEL_BUFFER_SIZE: usize = 1;
@@ -98,15 +96,15 @@ mod kb {
     struct Local {
         key_matrix: Option<
             BasicVerticalSwitchMatrix<
-                { keyboard::KEY_MATRIX_ROW_COUNT },
-                { keyboard::KEY_MATRIX_COL_COUNT },
+                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT },
+                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT },
             >,
         >,
         rotary_encoder: Option<RotaryEncoder>,
-        heartbeat_led: Option<Channel<pwm::Slice<pwm::Pwm6, pwm::FreeRunning>, pwm::B>>,
+        heartbeat_led: Option<HeartbeatLED>,
         rgb_matrix: Option<
             RGBMatrix<
-                { keyboard::RGB_MATRIX_LED_COUNT },
+                { <Keyboard as KeyboardConfiguration>::RGB_MATRIX_LED_COUNT },
                 ws2812_pio::Ws2812Direct<
                     pac::PIO0,
                     pio::SM0,
@@ -154,17 +152,8 @@ mod kb {
         .ok()
         .unwrap();
 
-        // Init GPIO pins and PWM slices
-        let pins = gpio::Pins::new(
-            ctx.device.IO_BANK0,
-            ctx.device.PADS_BANK0,
-            Sio::new(ctx.device.SIO).gpio_bank0,
-            &mut ctx.device.RESETS,
-        );
-        let mut slices = pwm::Slices::new(ctx.device.PWM, &mut ctx.device.RESETS);
-
         // Init channels
-        let (input_sender, input_receiver) = rtic_sync::make_channel!(Input<{keyboard::KEY_MATRIX_ROW_COUNT}, {keyboard::KEY_MATRIX_COL_COUNT}>, INPUT_CHANNEL_BUFFER_SIZE);
+        let (input_sender, input_receiver) = rtic_sync::make_channel!(Input<{<Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT}, {<Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT}>, INPUT_CHANNEL_BUFFER_SIZE);
         let (keys_sender, keys_receiver) =
             rtic_sync::make_channel!(Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE);
         let (frame_sender, frame_receiver) = rtic_sync::make_channel!(Box<dyn FrameIterator>, 1);
@@ -196,94 +185,26 @@ mod kb {
             .unwrap()
             .build();
 
-        // Init heartbeat LED
-        let heartbeat_led = if keyboard::ENABLE_HEARTBEAT_LED {
-            slices.pwm6.set_ph_correct();
-            slices.pwm6.enable();
-            slices.pwm6.channel_b.output_to(
-                pins.gpio29
-                    .into_push_pull_output_in_state(gpio::PinState::Low),
-            );
-            Some(slices.pwm6.channel_b)
-        } else {
-            None
-        };
+        // Init keyboard
+        let (pio0, sm0, _, _, _) = ctx.device.PIO0.split(&mut ctx.device.RESETS);
+        let (key_matrix, rotary_encoder, heartbeat_led, rgb_matrix) = Keyboard::init(
+            gpio::Pins::new(
+                ctx.device.IO_BANK0,
+                ctx.device.PADS_BANK0,
+                Sio::new(ctx.device.SIO).gpio_bank0,
+                &mut ctx.device.RESETS,
+            ),
+            pwm::Slices::new(ctx.device.PWM, &mut ctx.device.RESETS),
+            pio0,
+            sm0,
+            clocks.peripheral_clock.freq(),
+        );
 
-        // Init switch matrix
-        #[rustfmt::skip]
-        let key_matrix = if keyboard::ENABLE_KEY_MATRIX {
-            Some(BasicVerticalSwitchMatrix::new(
-                [
-                    Box::new(pins.gpio24.into_pull_down_input()),
-                    Box::new(pins.gpio23.into_pull_down_input()),
-                    Box::new(pins.gpio22.into_pull_down_input()),
-                    Box::new(pins.gpio21.into_pull_down_input()),
-                    Box::new(pins.gpio20.into_pull_down_input()),
-                ],
-                [
-                    Box::new(pins.gpio0.into_push_pull_output_in_state(gpio::PinState::Low)),
-                    Box::new(pins.gpio1.into_push_pull_output_in_state(gpio::PinState::Low)),
-                    Box::new(pins.gpio2.into_push_pull_output_in_state(gpio::PinState::Low)),
-                    Box::new(pins.gpio3.into_push_pull_output_in_state(gpio::PinState::Low)),
-                    Box::new(pins.gpio4.into_push_pull_output_in_state(gpio::PinState::Low)),
-                    Box::new(pins.gpio5.into_push_pull_output_in_state(gpio::PinState::Low)),
-                    Box::new(pins.gpio6.into_push_pull_output_in_state(gpio::PinState::Low)),
-                    Box::new(pins.gpio7.into_push_pull_output_in_state(gpio::PinState::Low)),
-                    Box::new(pins.gpio8.into_push_pull_output_in_state(gpio::PinState::Low)),
-                    Box::new(pins.gpio9.into_push_pull_output_in_state(gpio::PinState::Low)),
-                    Box::new(pins.gpio10.into_push_pull_output_in_state(gpio::PinState::Low)),
-                    Box::new(pins.gpio11.into_push_pull_output_in_state(gpio::PinState::Low)),
-                    Box::new(pins.gpio12.into_push_pull_output_in_state(gpio::PinState::Low)),
-                    Box::new(pins.gpio13.into_push_pull_output_in_state(gpio::PinState::Low)),
-                    Box::new(pins.gpio14.into_push_pull_output_in_state(gpio::PinState::Low)),
-                ],
-            ))
-        } else {
-            None
-        };
-
-        // Init rotary encoder
-        let rotary_encoder = if keyboard::ENABLE_ROTARY_ENCODER {
-            Some(RotaryEncoder::new(
-                Box::new(pins.gpio15.into_pull_up_input()),
-                Box::new(pins.gpio17.into_pull_up_input()),
-                Box::new(pins.gpio16.into_push_pull_output()),
-                Mode::DentHighPrecision,
-            ))
-        } else {
-            None
-        };
-
-        // Init RGB
-        let rgb_matrix = if keyboard::ENABLE_RGB_MATRIX {
-            let (mut pio0, sm0, _, _, _) = ctx.device.PIO0.split(&mut ctx.device.RESETS);
-            let ws = ws2812_pio::Ws2812Direct::new(
-                pins.gpio28.into_function(),
-                &mut pio0,
-                sm0,
-                clocks.peripheral_clock.freq(),
-            );
-            Some(RGBMatrix::<{ keyboard::RGB_MATRIX_LED_COUNT }, _>::new(ws))
-        } else {
-            None
-        };
-
-        debug!("spawn heartbeat");
         heartbeat::spawn().ok();
-
-        debug!("spawn input_scanner");
         input_scanner::spawn(input_sender).ok();
-
-        debug!("spawn processor");
         processor::spawn(input_receiver, keys_sender, frame_sender).ok();
-
-        debug!("spawn rgb_matrix_renderer");
         rgb_matrix_renderer::spawn(frame_receiver).ok();
-
-        debug!("spawn hid_usb_tick");
         hid_usb_tick::spawn().ok();
-
-        debug!("spawn hid_reporter");
         hid_reporter::spawn(keys_receiver).ok();
 
         info!("enable interrupts");
@@ -320,7 +241,10 @@ mod kb {
         ctx: input_scanner::Context,
         mut input_sender: Sender<
             'static,
-            Input<{ keyboard::KEY_MATRIX_ROW_COUNT }, { keyboard::KEY_MATRIX_COL_COUNT }>,
+            Input<
+                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT },
+                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT },
+            >,
             INPUT_CHANNEL_BUFFER_SIZE,
         >,
     ) {
@@ -370,7 +294,10 @@ mod kb {
         _: processor::Context,
         mut input_receiver: Receiver<
             'static,
-            Input<{ keyboard::KEY_MATRIX_ROW_COUNT }, { keyboard::KEY_MATRIX_COL_COUNT }>,
+            Input<
+                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT },
+                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT },
+            >,
             INPUT_CHANNEL_BUFFER_SIZE,
         >,
         mut keys_sender: Sender<'static, Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE>,
@@ -378,14 +305,17 @@ mod kb {
     ) {
         info!("processor()");
         let input_processors: &mut [&mut dyn InputProcessor<
-            { keyboard::KEY_MATRIX_ROW_COUNT },
-            { keyboard::KEY_MATRIX_COL_COUNT },
+            { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT },
+            { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT },
         >] = &mut [&mut KeyMatrixRisingFallingDebounceProcessor::new(
             10.millis(),
         )];
-        let mut mapper = Mapper::new(keyboard::get_input_map());
-        let events_processors: &mut [&mut dyn EventsProcessor<keyboard::Layer>] =
-            &mut [&mut RGBProcessor::<{ keyboard::RGB_MATRIX_LED_COUNT }>::new(frame_sender)];
+        let mut mapper = Mapper::new(<Keyboard as KeyboardConfiguration>::get_input_map());
+        let events_processors: &mut [&mut dyn EventsProcessor<
+            <Keyboard as KeyboardConfiguration>::Layer,
+        >] = &mut [&mut RGBProcessor::<
+            { <Keyboard as KeyboardConfiguration>::RGB_MATRIX_LED_COUNT },
+        >::new(frame_sender)];
 
         let mut poll_end_time = Mono::now();
         let mut n: u64 = 0;
@@ -399,7 +329,8 @@ mod kb {
                 _ => {}
             }
 
-            let mut events = Vec::<Event<keyboard::Layer>>::with_capacity(10);
+            let mut events =
+                Vec::<Event<<Keyboard as KeyboardConfiguration>::Layer>>::with_capacity(10);
             mapper.map(&input, &mut events);
 
             match events_processors
@@ -513,10 +444,7 @@ mod kb {
     async fn heartbeat(ctx: heartbeat::Context) {
         info!("heartbeat()");
         match ctx.local.heartbeat_led {
-            Some(heartbeat_led) => loop {
-                util::lerp(heartbeat_led, 0, MAX_PWM_POWER, 200, 10).await;
-                util::lerp(heartbeat_led, MAX_PWM_POWER, 0, 200, 10).await;
-            },
+            Some(heartbeat_led) => heartbeat_led.cycle().await,
             None => {}
         }
     }
