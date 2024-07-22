@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  dependencies:
+    name: Dependencies
+    runs-on: Ubuntu-24.04
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    - name: Setup Rust toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+    - name: Cargo fetch
+      run: cargo fetch --verbose
+
+  init-matrix:
+    name: Initialize Matrix
+    runs-on: Ubuntu-24.04
+    needs: [dependencies]
+    outputs:
+      combinations: ${{ steps.combinations.outputs.combinations }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    - name: Get combinations
+      id: combinations
+      run: |
+        echo "combinations=[$(find ./src/keyboard -not -name "mod.rs" -name "*.rs" |  awk -F'/' '{sub(/\.rs$/, "", $6); print "{\"keyboard\": \""$4"\", \"layout\": \""$6"\"}"}' ORS="," | sed -e '$ s/,$//')]" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build
+    runs-on: Ubuntu-24.04
+    needs: [init-matrix]
+    strategy:
+      matrix:
+        combination: ${{ fromJSON(needs.init-matrix.outputs.combinations) }}
+    env:
+      KEYBOARD: ${{ matrix.combination.keyboard }}
+      LAYOUT: ${{ matrix.combination.layout }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    - name: Setup Rust toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+    - name: Cargo build
+      run: cargo build --verbose
+
+  lint:
+    name: Lint
+    runs-on: Ubuntu-24.04
+    needs: [init-matrix]
+    strategy:
+      matrix:
+        combination: ${{ fromJSON(needs.init-matrix.outputs.combinations) }}
+    env:
+      KEYBOARD: ${{ matrix.combination.keyboard }}
+      LAYOUT: ${{ matrix.combination.layout }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    - name: Setup Rust toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+    - name: Cargo fmt
+      run: cargo fmt --all --check --verbose
+    - name: Cargo clippy
+      run: cargo clippy --verbose

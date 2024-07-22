@@ -2,8 +2,9 @@ use defmt::Format;
 use usbd_human_interface_device::page::Keyboard;
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Debug, Format)]
+#[derive(Clone, Copy, Debug, Default, Format)]
 pub enum Action<L: LayerIndex> {
+    #[default]
     Pass,
     None,
     Key(Key),
@@ -20,12 +21,6 @@ impl<L: LayerIndex> From<Key> for Action<L> {
 impl<L: LayerIndex> From<L> for Action<L> {
     fn from(value: L) -> Self {
         Action::LayerModifier(value)
-    }
-}
-
-impl<L: LayerIndex> Default for Action<L> {
-    fn default() -> Self {
-        Action::Pass
     }
 }
 
@@ -119,9 +114,9 @@ pub enum Key {
     VolumeDown,
 }
 
-impl Into<Keyboard> for Key {
-    fn into(self) -> Keyboard {
-        match self {
+impl From<Key> for Keyboard {
+    fn from(from: Key) -> Keyboard {
+        match from {
             Key::Escape => Keyboard::Escape,
             Key::F1 => Keyboard::F1,
             Key::F2 => Keyboard::F2,
@@ -211,7 +206,7 @@ impl Into<Keyboard> for Key {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, clippy::enum_variant_names)]
 #[derive(Clone, Copy, Debug, Format, PartialEq)]
 pub enum Control {
     RGBAnimationNext,
@@ -225,8 +220,9 @@ pub enum Control {
 
 pub trait LayerIndex: Copy + Default + PartialEq + PartialOrd + Format + Into<usize> {}
 
-#[derive(Clone, Copy, Debug, Format, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Format, PartialEq)]
 pub enum Edge {
+    #[default]
     None,
     Rising,
     Falling,

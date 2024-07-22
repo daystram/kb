@@ -16,11 +16,11 @@ pub struct Result {
 
 impl Default for Result {
     fn default() -> Self {
-        return Result {
+        Result {
             scan_time_ticks: 0,
             direction: Direction::None,
             edge: Edge::None,
-        };
+        }
     }
 }
 
@@ -55,15 +55,16 @@ impl RotaryEncoder {
         mode: Mode,
     ) -> Self {
         pin_c.set_low().unwrap();
-        return RotaryEncoder {
+        RotaryEncoder {
             pin_a,
             pin_b,
             phase_history: 0b0001, // start on one of the valid phases
             mode,
             previous_result: Result::default(),
-        };
+        }
     }
 
+    #[allow(clippy::identity_op)]
     pub fn scan(&mut self) -> Result {
         let mut result = Result::default();
         let mut new_phase = (self.phase_history << 2) & 0b0000_1100;
@@ -102,6 +103,6 @@ impl RotaryEncoder {
         ));
         result.scan_time_ticks = Mono::now().ticks();
         self.previous_result = result;
-        return result;
+        result
     }
 }

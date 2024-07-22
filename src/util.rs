@@ -17,7 +17,7 @@ pub async fn halt_blink<P: OutputPin + ?Sized>(led: &mut P, us: u32) -> Result<(
         Err(e) => return Err(e),
     };
     halt((us / 2) as u64).await;
-    return Ok(());
+    Ok(())
 }
 
 pub async fn halt(us: u64) {

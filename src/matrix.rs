@@ -47,11 +47,11 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize>
         rows: [Box<dyn InputPin<Error = gpio::Error>>; ROW_COUNT],
         cols: [Box<dyn OutputPin<Error = gpio::Error>>; COL_COUNT],
     ) -> Self {
-        return BasicVerticalSwitchMatrix {
+        BasicVerticalSwitchMatrix {
             rows,
             cols,
             previous_result: Result::default(),
-        };
+        }
     }
 }
 
@@ -74,7 +74,7 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, COL_COUN
         }
         result.scan_time_ticks = Mono::now().ticks();
         self.previous_result = result;
-        return result;
+        result
     }
 }
 
@@ -92,11 +92,11 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize>
         rows: [Box<dyn OutputPin<Error = gpio::Error>>; ROW_COUNT],
         cols: [Box<dyn InputPin<Error = gpio::Error>>; COL_COUNT],
     ) -> Self {
-        return BasicHorizontalSwitchMatrix {
+        BasicHorizontalSwitchMatrix {
             rows,
             cols,
             previous_result: Result::default(),
-        };
+        }
     }
 }
 
@@ -118,6 +118,6 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, COL_COUN
             halt(1).await;
         }
         self.previous_result = result;
-        return result;
+        result
     }
 }

@@ -14,29 +14,24 @@ use crate::{
 
 pub const LAYER_COUNT: usize = 2;
 
-#[derive(Clone, Copy, PartialEq, PartialOrd, Format)]
+#[derive(Clone, Copy, Default, Format, PartialEq, PartialOrd)]
 pub enum Layer {
+    #[default]
     Base,
     Function1,
 }
 
 impl LayerIndex for Layer {}
 
-impl Into<usize> for Layer {
-    fn into(self) -> usize {
-        self as usize
-    }
-}
-
-impl Default for Layer {
-    fn default() -> Self {
-        return Layer::Base;
+impl From<Layer> for usize {
+    fn from(value: Layer) -> usize {
+        value as usize
     }
 }
 
 #[rustfmt::skip]
 pub fn get_input_map() -> InputMap<{ <super::super::Keyboard as KeyboardConfiguration>::LAYER_COUNT }, { <super::super::Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT }, { <super::super::Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT }, <super::super::Keyboard as KeyboardConfiguration>::Layer> {
-    return InputMap::new(
+    InputMap::new(
         [
             [
                 [K(Key::A),                    K(Key::B)],
@@ -59,5 +54,5 @@ pub fn get_input_map() -> InputMap<{ <super::super::Keyboard as KeyboardConfigur
                 _ => ___________,
             },
         ],
-    );
+    )
 }

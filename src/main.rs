@@ -3,6 +3,7 @@
 #![feature(type_alias_impl_trait)]
 #![feature(associated_type_defaults)]
 #![feature(trait_alias)]
+#![allow(clippy::type_complexity)]
 mod heartbeat;
 mod key;
 mod keyboard;
@@ -139,7 +140,7 @@ mod kb {
 
         // Configure watchdog, monotonics, and clock - The default is to generate a 125 MHz system clock
         let mut watchdog = Watchdog::new(ctx.device.WATCHDOG);
-        Mono::start(ctx.device.TIMER, &mut ctx.device.RESETS);
+        Mono::start(ctx.device.TIMER, &ctx.device.RESETS);
         let clocks = init_clocks_and_plls(
             XOSC_CRYSTAL_FREQ,
             ctx.device.XOSC,
@@ -321,24 +322,24 @@ mod kb {
         let mut n: u64 = 0;
         while let Ok(mut input) = input_receiver.recv().await {
             let process_start_time = Mono::now();
-            match input_processors
+            if input_processors
                 .iter_mut()
                 .try_for_each(|p| p.process(&mut input))
+                .is_err()
             {
-                Err(_) => continue,
-                _ => {}
+                continue;
             }
 
             let mut events =
                 Vec::<Event<<Keyboard as KeyboardConfiguration>::Layer>>::with_capacity(10);
             mapper.map(&input, &mut events);
 
-            match events_processors
+            if events_processors
                 .iter_mut()
                 .try_for_each(|p| p.process(&mut events))
+                .is_err()
             {
-                Err(_) => continue,
-                _ => {}
+                continue;
             }
 
             keys_sender
@@ -346,7 +347,7 @@ mod kb {
                     events
                         .into_iter()
                         .filter_map(|e| match e.action {
-                            Action::Key(k) => Some(k.into()),
+                            Action::Key(k) => Some(k),
                             _ => None,
                         })
                         .collect(),

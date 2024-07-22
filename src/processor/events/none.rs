@@ -10,12 +10,12 @@ pub struct NoneProcessor {}
 #[allow(dead_code)]
 impl NoneProcessor {
     pub fn new() -> Self {
-        return NoneProcessor {};
+        NoneProcessor {}
     }
 }
 
 impl<L: LayerIndex> EventsProcessor<L> for NoneProcessor {
     fn process(&mut self, _: &mut Vec<Event<L>>) -> Result {
-        return Ok(());
+        Ok(())
     }
 }
