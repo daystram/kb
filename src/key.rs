@@ -223,7 +223,7 @@ pub enum Control {
     RGBDirectionToggle,
 }
 
-pub trait LayerIndex: Copy + Into<usize> + Format {}
+pub trait LayerIndex: Copy + Default + PartialEq + PartialOrd + Format + Into<usize> {}
 
 #[derive(Clone, Copy, Debug, Format, PartialEq)]
 pub enum Edge {

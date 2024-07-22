@@ -24,3 +24,9 @@ usbd-human-interface-device = "0.5.0"
 smart-leds = "0.3.0"
 ws2812-pio = "0.8.0"
 enum-map = "2.7.3"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    "cfg(keyboard, values(any()))",
+    "cfg(layout, values(any()))",
+] }

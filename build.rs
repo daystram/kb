@@ -28,4 +28,18 @@ fn main() {
     // here, we ensure the build script is only re-run when
     // `memory.x` is changed.
     println!("cargo:rerun-if-changed=memory.x");
+
+    // Select keyboard.
+    println!("cargo::rerun-if-env-changed=KEYBOARD");
+    println!(
+        "cargo::rustc-cfg=keyboard=\"{}\"",
+        env::var("KEYBOARD").expect("KEYBOARD env var unset: specify the selected keyboard")
+    );
+
+    // Select layout.
+    println!("cargo::rerun-if-env-changed=LAYOUT");
+    println!(
+        "cargo::rustc-cfg=layout=\"{}\"",
+        env::var("LAYOUT").expect("LAYOUT env var unset: specify the selected layout")
+    );
 }

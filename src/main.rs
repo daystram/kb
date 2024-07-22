@@ -3,8 +3,9 @@
 #![feature(type_alias_impl_trait)]
 #![feature(associated_type_defaults)]
 #![feature(trait_alias)]
-mod config;
+mod heartbeat;
 mod key;
+mod keyboard;
 mod matrix;
 mod processor;
 mod rotary;
@@ -31,9 +32,11 @@ mod kb {
     #[used]
     pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
 
-    use embedded_hal::pwm::SetDutyCycle;
     use hal::{
-        clocks::init_clocks_and_plls, gpio, pac, pio, prelude::*, pwm, sio, usb, Sio, Watchdog,
+        clocks::init_clocks_and_plls,
+        gpio, pac,
+        pio::{self, PIOExt},
+        pwm, sio, usb, Clock, Sio, Watchdog,
     };
 
     use rtic_monotonics::rp2040::prelude::*;
@@ -42,14 +45,15 @@ mod kb {
     use rtic_sync::channel::{Receiver, Sender};
     use usb_device::{class_prelude::*, prelude::*, UsbError};
     use usbd_human_interface_device::{
-        device::{self, keyboard::NKROBootKeyboard},
+        device::keyboard::{NKROBootKeyboard, NKROBootKeyboardConfig},
         usb_class::{UsbHidClass, UsbHidClassBuilder},
         UsbHidError,
     };
 
     use crate::{
-        config,
+        heartbeat::HeartbeatLED,
         key::{Action, Key},
+        keyboard::{Keyboard, KeyboardConfiguration},
         matrix::{BasicVerticalSwitchMatrix, Scanner},
         processor::{
             events::rgb::{FrameIterator, RGBMatrix, RGBProcessor},
@@ -57,11 +61,10 @@ mod kb {
             mapper::{Input, Mapper},
             Event, EventsProcessor, InputProcessor,
         },
-        rotary::{Mode, RotaryEncoder},
+        rotary::RotaryEncoder,
     };
 
     const XOSC_CRYSTAL_FREQ: u32 = 12_000_000;
-    const MAX_PWM_POWER: u16 = 0x6000; // max: 0x8000
 
     const INPUT_CHANNEL_BUFFER_SIZE: usize = 1;
     const KEYS_CHANNEL_BUFFER_SIZE: usize = 1;
@@ -75,8 +78,8 @@ mod kb {
 
     const DEBUG_LOG_INPUT_SCANNER_ENABLE_TIMING: bool = false;
     const DEBUG_LOG_INPUT_SCANNER_INTERVAL: u64 = 50;
-    const DEBUG_LOG_STREAM_PROCESSOR_ENABLE_TIMING: bool = false;
-    const DEBUG_LOG_STREAM_PROCESSOR_INTERVAL: u64 = 50;
+    const DEBUG_LOG_PROCESSOR_ENABLE_TIMING: bool = false;
+    const DEBUG_LOG_PROCESSOR_INTERVAL: u64 = 50;
     const DEBUG_LOG_SENT_KEYS: bool = false;
 
     #[shared]
@@ -91,11 +94,24 @@ mod kb {
 
     #[local]
     struct Local {
-        switch_matrix: BasicVerticalSwitchMatrix<
-            { config::KEY_MATRIX_ROW_COUNT },
-            { config::KEY_MATRIX_COL_COUNT },
+        key_matrix: Option<
+            BasicVerticalSwitchMatrix<
+                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT },
+                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT },
+            >,
         >,
-        rotary_encoder: RotaryEncoder,
+        rotary_encoder: Option<RotaryEncoder>,
+        heartbeat_led: Option<HeartbeatLED>,
+        rgb_matrix: Option<
+            RGBMatrix<
+                { <Keyboard as KeyboardConfiguration>::RGB_MATRIX_LED_COUNT },
+                ws2812_pio::Ws2812Direct<
+                    pac::PIO0,
+                    pio::SM0,
+                    gpio::Pin<gpio::bank0::Gpio28, gpio::FunctionPio0, gpio::PullDown>,
+                >,
+            >,
+        >,
     }
 
     #[init(local = [usb_allocator: Option<UsbBusAllocator<usb::UsbBus>> = None])]
@@ -136,13 +152,11 @@ mod kb {
         .ok()
         .unwrap();
 
-        // Init GPIO pins
-        let pins = gpio::Pins::new(
-            ctx.device.IO_BANK0,
-            ctx.device.PADS_BANK0,
-            Sio::new(ctx.device.SIO).gpio_bank0,
-            &mut ctx.device.RESETS,
-        );
+        // Init channels
+        let (input_sender, input_receiver) = rtic_sync::make_channel!(Input<{<Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT}, {<Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT}>, INPUT_CHANNEL_BUFFER_SIZE);
+        let (keys_sender, keys_receiver) =
+            rtic_sync::make_channel!(Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE);
+        let (frame_sender, frame_receiver) = rtic_sync::make_channel!(Box<dyn FrameIterator>, 1);
 
         // Init HID device
         info!("init usb allocator");
@@ -159,7 +173,7 @@ mod kb {
 
         info!("init usb keyboard");
         let usb_keyboard = UsbHidClassBuilder::new()
-            .add_device(device::keyboard::NKROBootKeyboardConfig::default())
+            .add_device(NKROBootKeyboardConfig::default())
             .build(usb_allocator);
 
         info!("init usb device");
@@ -171,95 +185,28 @@ mod kb {
             .unwrap()
             .build();
 
-        debug!("spawn hid_usb_tick");
-        hid_usb_tick::spawn().ok();
-
-        // Init heartbeat LED
-        let mut pwm_slices = pwm::Slices::new(ctx.device.PWM, &mut ctx.device.RESETS);
-        pwm_slices.pwm6.set_ph_correct();
-        pwm_slices.pwm6.enable();
-
-        let mut pwm_channel = pwm_slices.pwm6.channel_b;
-        pwm_channel.output_to(
-            pins.gpio29
-                .into_push_pull_output_in_state(gpio::PinState::Low),
-        );
-
-        debug!("spawn heartbeat");
-        heartbeat::spawn(pwm_channel).ok();
-
-        // Init channels
-        let (input_sender, input_receiver) = rtic_sync::make_channel!(Input<{config::KEY_MATRIX_ROW_COUNT}, {config::KEY_MATRIX_COL_COUNT}>, INPUT_CHANNEL_BUFFER_SIZE);
-        let (keys_sender, keys_receiver) =
-            rtic_sync::make_channel!(Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE);
-        let (frame_sender, frame_receiver) = rtic_sync::make_channel!(Box<dyn FrameIterator>, 1);
-
-        // Init switch matrix
-        #[rustfmt::skip]
-        let switch_matrix = BasicVerticalSwitchMatrix::new(
-            [
-                Box::new(pins.gpio24.into_pull_down_input()),
-                Box::new(pins.gpio23.into_pull_down_input()),
-                Box::new(pins.gpio22.into_pull_down_input()),
-                Box::new(pins.gpio21.into_pull_down_input()),
-                Box::new(pins.gpio20.into_pull_down_input()),
-            ],
-            [
-                Box::new(pins.gpio0.into_push_pull_output_in_state(gpio::PinState::Low)),
-                Box::new(pins.gpio1.into_push_pull_output_in_state(gpio::PinState::Low)),
-                Box::new(pins.gpio2.into_push_pull_output_in_state(gpio::PinState::Low)),
-                Box::new(pins.gpio3.into_push_pull_output_in_state(gpio::PinState::Low)),
-                Box::new(pins.gpio4.into_push_pull_output_in_state(gpio::PinState::Low)),
-                Box::new(pins.gpio5.into_push_pull_output_in_state(gpio::PinState::Low)),
-                Box::new(pins.gpio6.into_push_pull_output_in_state(gpio::PinState::Low)),
-                Box::new(pins.gpio7.into_push_pull_output_in_state(gpio::PinState::Low)),
-                Box::new(pins.gpio8.into_push_pull_output_in_state(gpio::PinState::Low)),
-                Box::new(pins.gpio9.into_push_pull_output_in_state(gpio::PinState::Low)),
-                Box::new(pins.gpio10.into_push_pull_output_in_state(gpio::PinState::Low)),
-                Box::new(pins.gpio11.into_push_pull_output_in_state(gpio::PinState::Low)),
-                Box::new(pins.gpio12.into_push_pull_output_in_state(gpio::PinState::Low)),
-                Box::new(pins.gpio13.into_push_pull_output_in_state(gpio::PinState::Low)),
-                Box::new(pins.gpio14.into_push_pull_output_in_state(gpio::PinState::Low)),
-            ],
-        );
-
-        // Init rotary encoder
-        #[rustfmt::skip]
-        let rotary_encoder = RotaryEncoder::new(
-            Box::new(pins.gpio15.into_pull_up_input()),
-            Box::new(pins.gpio17.into_pull_up_input()),
-            Box::new(pins.gpio16.into_push_pull_output()),
-            Mode::DentHighPrecision,
-        );
-
-        // Init LED matrix
-        let (mut pio0, sm0, _, _, _) = ctx.device.PIO0.split(&mut ctx.device.RESETS);
-        let ws: ws2812_pio::Ws2812Direct<
-            pac::PIO0,
-            pio::SM0,
-            gpio::Pin<gpio::bank0::Gpio28, gpio::FunctionPio0, gpio::PullDown>,
-        > = ws2812_pio::Ws2812Direct::new(
-            pins.gpio28.into_function(),
-            &mut pio0,
+        // Init keyboard
+        let (pio0, sm0, _, _, _) = ctx.device.PIO0.split(&mut ctx.device.RESETS);
+        let (key_matrix, rotary_encoder, heartbeat_led, rgb_matrix) = Keyboard::init(
+            gpio::Pins::new(
+                ctx.device.IO_BANK0,
+                ctx.device.PADS_BANK0,
+                Sio::new(ctx.device.SIO).gpio_bank0,
+                &mut ctx.device.RESETS,
+            ),
+            pwm::Slices::new(ctx.device.PWM, &mut ctx.device.RESETS),
+            pio0,
             sm0,
             clocks.peripheral_clock.freq(),
         );
-        debug!("spawn rgb_matrix_renderer");
-        rgb_matrix_renderer::spawn(ws, frame_receiver).ok();
 
-        // Init matrix scanner
-        debug!("spawn input_scanner");
+        heartbeat::spawn().ok();
         input_scanner::spawn(input_sender).ok();
-
-        // Init stream processor
-        debug!("spawn stream_processor");
-        stream_processor::spawn(input_receiver, keys_sender, frame_sender).ok();
-
-        // Init HID reporter
-        debug!("spawn hid_reporter");
+        processor::spawn(input_receiver, keys_sender, frame_sender).ok();
+        rgb_matrix_renderer::spawn(frame_receiver).ok();
+        hid_usb_tick::spawn().ok();
         hid_reporter::spawn(keys_receiver).ok();
 
-        // Enable interrupts
         info!("enable interrupts");
         unsafe {
             pac::NVIC::unmask(pac::Interrupt::USBCTRL_IRQ);
@@ -272,27 +219,32 @@ mod kb {
                 usb_keyboard,
             },
             Local {
-                switch_matrix,
+                key_matrix,
                 rotary_encoder,
+                heartbeat_led,
+                rgb_matrix,
             },
         )
     }
 
     #[idle()]
     fn idle(_ctx: idle::Context) -> ! {
-        debug!("idle()");
+        info!("idle()");
         loop {
             // https://developer.arm.com/documentation/ddi0406/c/Application-Level-Architecture/Instruction-Details/Alphabetical-list-of-instructions/WFI
             rtic::export::wfi()
         }
     }
 
-    #[task (local=[switch_matrix, rotary_encoder], priority = 1)]
+    #[task (local=[key_matrix, rotary_encoder], priority = 1)]
     async fn input_scanner(
         ctx: input_scanner::Context,
         mut input_sender: Sender<
             'static,
-            Input<{ config::KEY_MATRIX_ROW_COUNT }, { config::KEY_MATRIX_COL_COUNT }>,
+            Input<
+                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT },
+                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT },
+            >,
             INPUT_CHANNEL_BUFFER_SIZE,
         >,
     ) {
@@ -301,10 +253,19 @@ mod kb {
         let mut n: u64 = 0;
         loop {
             let scan_start_time = Mono::now();
+            let key_matrix_result = match ctx.local.key_matrix {
+                Some(key_matrix) => key_matrix.scan().await,
+                None => Default::default(),
+            };
+            let rotary_encoder_result = match ctx.local.rotary_encoder {
+                Some(rotary_encoder) => rotary_encoder.scan(),
+                None => Default::default(),
+            };
+
             input_sender
                 .try_send(Input {
-                    key_matrix_result: ctx.local.switch_matrix.scan().await,
-                    rotary_encoder_result: ctx.local.rotary_encoder.scan(),
+                    key_matrix_result,
+                    rotary_encoder_result,
                 })
                 .ok(); // drop data if buffer is full
 
@@ -329,28 +290,32 @@ mod kb {
     }
 
     #[task(priority = 2)]
-    async fn stream_processor(
-        _: stream_processor::Context,
+    async fn processor(
+        _: processor::Context,
         mut input_receiver: Receiver<
             'static,
-            Input<{ config::KEY_MATRIX_ROW_COUNT }, { config::KEY_MATRIX_COL_COUNT }>,
+            Input<
+                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT },
+                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT },
+            >,
             INPUT_CHANNEL_BUFFER_SIZE,
         >,
         mut keys_sender: Sender<'static, Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE>,
         frame_sender: Sender<'static, Box<dyn FrameIterator>, 1>,
     ) {
-        info!("stream_processor()");
+        info!("processor()");
         let input_processors: &mut [&mut dyn InputProcessor<
-            { config::KEY_MATRIX_ROW_COUNT },
-            { config::KEY_MATRIX_COL_COUNT },
+            { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT },
+            { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT },
         >] = &mut [&mut KeyMatrixRisingFallingDebounceProcessor::new(
             10.millis(),
         )];
-        let mut mapper = Mapper::new(config::build_input_map());
-        let events_processors: &mut [&mut dyn EventsProcessor<config::Layer>] =
-            &mut [&mut RGBProcessor::<{ config::LED_COUNT }>::new(
-                frame_sender,
-            )];
+        let mut mapper = Mapper::new(<Keyboard as KeyboardConfiguration>::get_input_map());
+        let events_processors: &mut [&mut dyn EventsProcessor<
+            <Keyboard as KeyboardConfiguration>::Layer,
+        >] = &mut [&mut RGBProcessor::<
+            { <Keyboard as KeyboardConfiguration>::RGB_MATRIX_LED_COUNT },
+        >::new(frame_sender)];
 
         let mut poll_end_time = Mono::now();
         let mut n: u64 = 0;
@@ -364,7 +329,8 @@ mod kb {
                 _ => {}
             }
 
-            let mut events = Vec::<Event<config::Layer>>::with_capacity(10);
+            let mut events =
+                Vec::<Event<<Keyboard as KeyboardConfiguration>::Layer>>::with_capacity(10);
             mapper.map(&input, &mut events);
 
             match events_processors
@@ -387,12 +353,10 @@ mod kb {
                 )
                 .ok(); // drop data if buffer is full
 
-            if DEBUG_LOG_STREAM_PROCESSOR_ENABLE_TIMING
-                && (n % DEBUG_LOG_STREAM_PROCESSOR_INTERVAL == 0)
-            {
+            if DEBUG_LOG_PROCESSOR_ENABLE_TIMING && (n % DEBUG_LOG_PROCESSOR_INTERVAL == 0) {
                 let scan_end_time = Mono::now();
                 debug!(
-                    "[{}] stream_processor: {} us\tpoll: {} us\trate: {} Hz\t budget: {} %",
+                    "[{}] processor: {} us\tpoll: {} us\trate: {} Hz\t budget: {} %",
                     n,
                     (scan_end_time - process_start_time).to_micros(),
                     (scan_end_time - poll_end_time).to_micros(),
@@ -476,52 +440,25 @@ mod kb {
         }
     }
 
-    #[task(priority = 1)]
-    async fn heartbeat(
-        _: heartbeat::Context,
-        mut channel: pwm::Channel<pwm::Slice<pwm::Pwm6, pwm::FreeRunning>, pwm::B>,
-    ) {
+    #[task(local=[heartbeat_led], priority = 1)]
+    async fn heartbeat(ctx: heartbeat::Context) {
         info!("heartbeat()");
-        loop {
-            lerp(&mut channel, 0, MAX_PWM_POWER, 200, 10).await;
-
-            lerp(&mut channel, MAX_PWM_POWER, 0, 200, 10).await;
+        match ctx.local.heartbeat_led {
+            Some(heartbeat_led) => heartbeat_led.cycle().await,
+            None => {}
         }
     }
-    #[task(priority = 3)]
+    #[task(local=[rgb_matrix], priority = 3)]
     async fn rgb_matrix_renderer(
-        _ctx: rgb_matrix_renderer::Context,
-        ws: ws2812_pio::Ws2812Direct<
-            pac::PIO0,
-            pio::SM0,
-            gpio::Pin<gpio::bank0::Gpio28, gpio::FunctionPio0, gpio::PullDown>,
-        >,
+        ctx: rgb_matrix_renderer::Context,
         frame_receiver: Receiver<'static, Box<dyn FrameIterator>, 1>,
     ) {
-        debug!("rgb_matrix_renderer()");
-        let mut rgb_matrix = RGBMatrix::<{ config::LED_COUNT }, _>::new(ws);
-        rgb_matrix.render(frame_receiver).await;
-    }
-
-    async fn lerp<S: pwm::AnySlice>(
-        channel: &mut pwm::Channel<S, pwm::B>,
-        from: u16,
-        to: u16,
-        step: u16,
-        delay_ms: u64,
-    ) {
-        let diff = if from < to {
-            (to - from) / step
-        } else {
-            (from - to) / step
-        };
-
-        for d in (0..step)
-            .map(|x| x * diff)
-            .map(|x| if from < to { from + x } else { from - x })
-        {
-            Mono::delay(delay_ms.millis()).await;
-            channel.set_duty_cycle(d).unwrap();
+        info!("rgb_matrix_renderer()");
+        match ctx.local.rgb_matrix {
+            Some(rgb_matrix) => {
+                rgb_matrix.render(frame_receiver).await;
+            }
+            None => {}
         }
     }
 }
