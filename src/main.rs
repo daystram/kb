@@ -53,7 +53,7 @@ mod kb {
 
     use crate::{
         heartbeat::HeartbeatLED,
-        key::{Action, Key},
+        key::{Action, Edge, Key},
         keyboard::{Keyboard, KeyboardConfiguration},
         matrix::{BasicVerticalSwitchMatrix, Scanner},
         processor::{
@@ -84,6 +84,7 @@ mod kb {
     const DEBUG_LOG_INPUT_SCANNER_INTERVAL: u64 = 50;
     const DEBUG_LOG_PROCESSOR_ENABLE_TIMING: bool = false;
     const DEBUG_LOG_PROCESSOR_INTERVAL: u64 = 50;
+    const DEBUG_LOG_EVENTS: bool = true;
     const DEBUG_LOG_SENT_KEYS: bool = false;
 
     #[shared]
@@ -337,6 +338,13 @@ mod kb {
             let mut events =
                 Vec::<Event<<Keyboard as KeyboardConfiguration>::Layer>>::with_capacity(10);
             mapper.map(&input, &mut events);
+
+            if DEBUG_LOG_EVENTS {
+                events
+                    .iter()
+                    .filter(|e| e.edge != Edge::None)
+                    .for_each(|e| debug!("[{}] event: action: {} edge: {}", n, e.action, e.edge));
+            }
 
             if events_processors
                 .iter_mut()
