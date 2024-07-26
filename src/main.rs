@@ -53,12 +53,15 @@ mod kb {
 
     use crate::{
         heartbeat::HeartbeatLED,
-        key::{Action, Key},
+        key::{Action, Edge, Key},
         keyboard::{Keyboard, KeyboardConfiguration},
         matrix::{BasicVerticalSwitchMatrix, Scanner},
         processor::{
             events::rgb::{FrameIterator, RGBMatrix, RGBProcessor},
-            input::debounce::KeyMatrixRisingFallingDebounceProcessor,
+            input::{
+                debounce::KeyMatrixRisingFallingDebounceProcessor,
+                flip::{ConcurrentFlipProcessor, Pos},
+            },
             mapper::{Input, Mapper},
             Event, EventsProcessor, InputProcessor,
         },
@@ -81,6 +84,7 @@ mod kb {
     const DEBUG_LOG_INPUT_SCANNER_INTERVAL: u64 = 50;
     const DEBUG_LOG_PROCESSOR_ENABLE_TIMING: bool = false;
     const DEBUG_LOG_PROCESSOR_INTERVAL: u64 = 50;
+    const DEBUG_LOG_EVENTS: bool = true;
     const DEBUG_LOG_SENT_KEYS: bool = false;
 
     #[shared]
@@ -308,9 +312,10 @@ mod kb {
         let input_processors: &mut [&mut dyn InputProcessor<
             { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT },
             { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT },
-        >] = &mut [&mut KeyMatrixRisingFallingDebounceProcessor::new(
-            10.millis(),
-        )];
+        >] = &mut [
+            &mut KeyMatrixRisingFallingDebounceProcessor::new(10.millis()),
+            &mut ConcurrentFlipProcessor::new(Pos { row: 2, col: 1 }, Pos { row: 2, col: 3 }),
+        ];
         let mut mapper = Mapper::new(<Keyboard as KeyboardConfiguration>::get_input_map());
         let events_processors: &mut [&mut dyn EventsProcessor<
             <Keyboard as KeyboardConfiguration>::Layer,
@@ -333,6 +338,13 @@ mod kb {
             let mut events =
                 Vec::<Event<<Keyboard as KeyboardConfiguration>::Layer>>::with_capacity(10);
             mapper.map(&input, &mut events);
+
+            if DEBUG_LOG_EVENTS {
+                events
+                    .iter()
+                    .filter(|e| e.edge != Edge::None)
+                    .for_each(|e| debug!("[{}] event: action: {} edge: {}", n, e.action, e.edge));
+            }
 
             if events_processors
                 .iter_mut()

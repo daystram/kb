@@ -12,7 +12,7 @@ pub struct Result<const ROW_COUNT: usize, const COL_COUNT: usize> {
     pub matrix: [[Bit; COL_COUNT]; ROW_COUNT],
 }
 
-#[derive(Clone, Copy, Debug, Format)]
+#[derive(Clone, Copy, Debug, Default, Format)]
 pub struct Bit {
     pub edge: Edge,
     pub pressed: bool,
