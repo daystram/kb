@@ -82,13 +82,14 @@ impl<
         events: &mut Vec<Event<L>>,
     ) {
         // map key matrix
+        let result = input.key_matrix_result;
         let mut provisional_events = Vec::<Event<L>>::with_capacity(10);
         let mut new_layer = true;
         let mut layer = L::default();
         while new_layer {
             provisional_events.clear();
             new_layer = false;
-            for (i, row) in input.key_matrix_result.matrix.iter().enumerate() {
+            for (i, row) in result.matrix.iter().enumerate() {
                 for (j, bit) in row.iter().enumerate() {
                     let action = self.mapping.key_matrix[layer.into()][i][j];
                     if bit.pressed {
@@ -104,7 +105,7 @@ impl<
                     #[allow(clippy::nonminimal_bool)]
                     if !(bit.edge == Edge::None && !bit.pressed) {
                         provisional_events.push(Event {
-                            time_ticks: input.key_matrix_result.scan_time_ticks,
+                            time_ticks: result.scan_time_ticks,
                             i,
                             j,
                             edge: bit.edge,
@@ -116,14 +117,16 @@ impl<
         }
 
         // map rotary encoder
-        provisional_events.push(Event {
-            time_ticks: input.rotary_encoder_result.scan_time_ticks,
-            i: 0,
-            j: 0,
-            edge: input.rotary_encoder_result.edge,
-            action: self.mapping.rotary_encoder[layer.into()]
-                [input.rotary_encoder_result.direction],
-        });
+        let result = input.rotary_encoder_result;
+        if !(result.edge == Edge::None && result.direction == Direction::None) {
+            provisional_events.push(Event {
+                time_ticks: result.scan_time_ticks,
+                i: 0,
+                j: 0,
+                edge: result.edge,
+                action: self.mapping.rotary_encoder[layer.into()][result.direction],
+            });
+        }
 
         *events = provisional_events;
         self.previous_key_matrix_result = input.key_matrix_result;
