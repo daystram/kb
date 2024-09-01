@@ -1,14 +1,18 @@
 pub mod layout;
 
-use alloc::boxed::Box;
+use core::cell::RefCell;
+
+use alloc::{boxed::Box, rc::Rc};
 use hal::{fugit::HertzU32, gpio, pac, pio, pwm};
+use rtic_sync::arbiter::Arbiter;
 use ws2812_pio::Ws2812Direct;
 
 use crate::{
     heartbeat::HeartbeatLED,
-    keyboard::KeyboardConfiguration,
+    keyboard::{Configuration, Configurator},
     matrix::BasicVerticalSwitchMatrix,
     processor::events::rgb::RGBMatrix,
+    remote::transport::uart::{UartReceiver, UartSender},
     rotary::{Mode, RotaryEncoder},
 };
 
@@ -19,7 +23,7 @@ const ENABLE_RGB_MATRIX: bool = true;
 
 pub struct Keyboard {}
 
-impl KeyboardConfiguration for Keyboard {
+impl Configurator for Keyboard {
     const KEY_MATRIX_ROW_COUNT: usize = 2;
     const KEY_MATRIX_COL_COUNT: usize = 2;
 
@@ -30,26 +34,12 @@ impl KeyboardConfiguration for Keyboard {
         mut slices: pwm::Slices,
         mut pio0: pio::PIO<pac::PIO0>,
         sm0: pio::UninitStateMachine<(pac::PIO0, pio::SM0)>,
+        _uart0: pac::UART0,
+        _resets: &mut pac::RESETS,
         clock_freq: HertzU32,
     ) -> (
-        Option<
-            BasicVerticalSwitchMatrix<
-                { Self::KEY_MATRIX_ROW_COUNT },
-                { Self::KEY_MATRIX_COL_COUNT },
-            >,
-        >,
-        Option<RotaryEncoder>,
-        Option<HeartbeatLED>,
-        Option<
-            RGBMatrix<
-                { Self::RGB_MATRIX_LED_COUNT },
-                Ws2812Direct<
-                    pac::PIO0,
-                    pio::SM0,
-                    gpio::Pin<gpio::bank0::Gpio28, gpio::FunctionPio0, gpio::PullDown>,
-                >,
-            >,
-        >,
+        Configuration,
+        Option<(Arbiter<Rc<RefCell<UartSender>>>, UartReceiver)>,
     ) {
         #[rustfmt::skip]
         let key_matrix = if ENABLE_KEY_MATRIX {
@@ -91,17 +81,21 @@ impl KeyboardConfiguration for Keyboard {
         };
 
         let rgb_matrix = if ENABLE_RGB_MATRIX {
-            let ws = ws2812_pio::Ws2812Direct::new(
-                pins.gpio28.into_function(),
-                &mut pio0,
-                sm0,
-                clock_freq,
-            );
+            let ws = Ws2812Direct::new(pins.gpio28.into_function(), &mut pio0, sm0, clock_freq);
             Some(RGBMatrix::<{ Keyboard::RGB_MATRIX_LED_COUNT }, _>::new(ws))
         } else {
             None
         };
 
-        (key_matrix, rotary_encoder, heartbeat_led, rgb_matrix)
+        (
+            Configuration {
+                key_matrix,
+                key_matrix_split: None,
+                rotary_encoder,
+                heartbeat_led,
+                rgb_matrix,
+            },
+            None,
+        )
     }
 }

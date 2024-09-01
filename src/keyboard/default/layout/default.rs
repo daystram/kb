@@ -7,7 +7,7 @@ use crate::{
         Action::{Control as C, Key as K, LayerModifier as LM, Pass as ___________},
         Control, Key, LayerIndex,
     },
-    keyboard::KeyboardConfiguration,
+    keyboard::Configurator,
     processor::mapper::InputMap,
     rotary::Direction,
 };
@@ -30,7 +30,7 @@ impl From<Layer> for usize {
 }
 
 #[rustfmt::skip]
-pub fn get_input_map() -> InputMap<{ <super::super::Keyboard as KeyboardConfiguration>::LAYER_COUNT }, { <super::super::Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT }, { <super::super::Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT }, <super::super::Keyboard as KeyboardConfiguration>::Layer> {
+pub fn get_input_map() -> InputMap<{ <super::super::Keyboard as Configurator>::LAYER_COUNT }, { <super::super::Keyboard as Configurator>::KEY_MATRIX_ROW_COUNT }, { <super::super::Keyboard as Configurator>::KEY_MATRIX_COL_COUNT }, <super::super::Keyboard as Configurator>::Layer> {
     InputMap::new(
         [
             [
