@@ -1,10 +1,20 @@
-use alloc::boxed::Box;
+use alloc::{boxed::Box, rc::Rc, vec::Vec};
+use async_trait::async_trait;
+use core::{cell::RefCell, future};
 use defmt::Format;
 use embedded_hal::digital::{InputPin, OutputPin};
 use rp2040_hal::gpio;
 use rtic_monotonics::rp2040::prelude::*;
+use rtic_sync::arbiter::Arbiter;
+use serde::{de, ser::SerializeStruct, Deserialize, Serialize};
 
-use crate::{kb::Mono, key::Edge, util::halt};
+use crate::{
+    debug,
+    kb::Mono,
+    key::Edge,
+    remote::{self, MethodId, RemoteInvoker, Service, ServiceId},
+    split,
+};
 
 #[derive(Clone, Copy, Debug, Format)]
 pub struct Result<const ROW_COUNT: usize, const COL_COUNT: usize> {
@@ -12,7 +22,60 @@ pub struct Result<const ROW_COUNT: usize, const COL_COUNT: usize> {
     pub matrix: [[Bit; COL_COUNT]; ROW_COUNT],
 }
 
-#[derive(Clone, Copy, Debug, Default, Format)]
+impl<const ROW_COUNT: usize, const COL_COUNT: usize> Serialize for Result<ROW_COUNT, COL_COUNT> {
+    fn serialize<S>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("Result", 2)?;
+        state.serialize_field("scan_time_ticks", &self.scan_time_ticks)?;
+        state.serialize_field(
+            "matrix",
+            &self
+                .matrix
+                .iter()
+                .map(|row| row.to_vec())
+                .collect::<Vec<Vec<Bit>>>(),
+        )?;
+        state.end()
+    }
+}
+
+impl<'de, const ROW_COUNT: usize, const COL_COUNT: usize> Deserialize<'de>
+    for Result<ROW_COUNT, COL_COUNT>
+{
+    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct ResultOwned {
+            scan_time_ticks: u64,
+            matrix: Vec<Vec<Bit>>,
+        }
+
+        let temp = ResultOwned::deserialize(deserializer)?;
+        if temp.matrix.len() != ROW_COUNT || temp.matrix.iter().any(|row| row.len() != COL_COUNT) {
+            return Err(de::Error::custom(
+                "matrix dimensions do not match expectation",
+            ));
+        }
+
+        let mut result = Result::<ROW_COUNT, COL_COUNT> {
+            scan_time_ticks: temp.scan_time_ticks,
+            ..Default::default()
+        };
+        for (i, row) in temp.matrix.into_iter().enumerate() {
+            for (j, bit) in row.into_iter().enumerate() {
+                result.matrix[i][j] = bit;
+            }
+        }
+
+        Ok(result)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Format, Serialize)]
 pub struct Bit {
     pub edge: Edge,
     pub pressed: bool,
@@ -30,13 +93,141 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Default for Result<ROW_COUN
     }
 }
 
+#[async_trait]
 pub trait Scanner<const ROW_COUNT: usize, const COL_COUNT: usize> {
     async fn scan(&mut self) -> Result<ROW_COUNT, COL_COUNT>;
 }
 
+#[async_trait(?Send)]
+pub trait SplitScanner<const ROW_COUNT: usize, const COL_COUNT: usize>:
+    Scanner<ROW_COUNT, { COL_COUNT / 2 }>
+where
+    [(); COL_COUNT / 2]:,
+{
+    async fn scan<I>(&mut self, client: &Arbiter<Rc<RefCell<I>>>) -> Result<ROW_COUNT, COL_COUNT>
+    where
+        I: RemoteInvoker;
+}
+
+pub struct SplitSwitchMatrix<const ROW_COUNT: usize, const COL_COUNT: usize>
+where
+    [(); COL_COUNT / 2]:,
+{
+    local_matrix: BasicVerticalSwitchMatrix<{ ROW_COUNT }, { COL_COUNT / 2 }>, // TODO: use boxed scanner
+}
+
+#[allow(dead_code)]
+impl<const ROW_COUNT: usize, const COL_COUNT: usize> SplitSwitchMatrix<ROW_COUNT, COL_COUNT>
+where
+    [(); COL_COUNT / 2]:,
+{
+    pub fn new(local_matrix: BasicVerticalSwitchMatrix<{ ROW_COUNT }, { COL_COUNT / 2 }>) -> Self {
+        SplitSwitchMatrix { local_matrix }
+    }
+}
+
+const SERVICE_ID_KEY_MATRIX: ServiceId = 0x10;
+const METHOD_ID_KEY_MATRIX_SCAN: MethodId = 0x11;
+
+#[async_trait]
+impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, { COL_COUNT / 2 }>
+    for SplitSwitchMatrix<ROW_COUNT, COL_COUNT>
+where
+    [(); COL_COUNT / 2]:,
+{
+    async fn scan(&mut self) -> Result<ROW_COUNT, { COL_COUNT / 2 }> {
+        let start_time = Mono::now();
+        let result = self.local_matrix.scan().await;
+        let end_time = Mono::now();
+        debug::log_duration(debug::LogDurationTag::KeyMatrixScan, start_time, end_time);
+        result
+    }
+}
+
+#[async_trait(?Send)]
+impl<const ROW_COUNT: usize, const COL_COUNT: usize> SplitScanner<ROW_COUNT, COL_COUNT>
+    for SplitSwitchMatrix<ROW_COUNT, COL_COUNT>
+where
+    [(); COL_COUNT / 2]:,
+{
+    async fn scan<I>(&mut self, client: &Arbiter<Rc<RefCell<I>>>) -> Result<ROW_COUNT, COL_COUNT>
+    where
+        I: RemoteInvoker,
+    {
+        let (remote_response, local_result) = future::join!(client
+            .access()
+            .await
+            .borrow_mut()
+            .invoke::<SwitchMatrixScanRequest, SwitchMatrixScanResponse<{ROW_COUNT}, {COL_COUNT/2}>>(
+                SERVICE_ID_KEY_MATRIX,
+                METHOD_ID_KEY_MATRIX_SCAN,
+                SwitchMatrixScanRequest {},
+            ), Scanner::scan(self)).await;
+
+        // merge
+        let mut merged_matrix = [[Bit {
+            edge: Edge::None,
+            pressed: false,
+        }; COL_COUNT]; ROW_COUNT];
+
+        let (left_matrix, right_matrix) = match split::get_self_side() {
+            split::Side::Left => (local_result.matrix, remote_response.result.matrix),
+            split::Side::Right => (remote_response.result.matrix, local_result.matrix),
+        };
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..ROW_COUNT {
+            for j in 0..(COL_COUNT / 2) {
+                merged_matrix[i][j] = left_matrix[i][j];
+                merged_matrix[i][COL_COUNT - j - 1] = right_matrix[i][j]; // flip
+            }
+        }
+
+        Result {
+            scan_time_ticks: local_result.scan_time_ticks,
+            matrix: merged_matrix,
+        }
+    }
+}
+
+#[async_trait(?Send)]
+impl<const ROW_COUNT: usize, const COL_COUNT: usize> Service
+    for SplitSwitchMatrix<ROW_COUNT, COL_COUNT>
+where
+    [(); COL_COUNT / 2]:,
+{
+    fn get_service_id(&self) -> ServiceId {
+        SERVICE_ID_KEY_MATRIX
+    }
+
+    async fn dispatch(
+        &mut self,
+        method_id: MethodId,
+        _request_buffer: &[u8],
+    ) -> core::result::Result<Vec<u8>, remote::Error> {
+        match method_id {
+            METHOD_ID_KEY_MATRIX_SCAN => {
+                let result = Scanner::scan(self).await;
+                match postcard::to_allocvec(&SwitchMatrixScanResponse { result }) {
+                    Ok(res) => core::result::Result::Ok(res),
+                    Err(_) => core::result::Result::Err(remote::Error::ResponseSerializationFailed),
+                }
+            }
+            _ => core::result::Result::Err(remote::Error::MethodUnimplemented),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Format, Serialize)]
+pub struct SwitchMatrixScanRequest {}
+
+#[derive(Clone, Copy, Debug, Deserialize, Format, Serialize)]
+pub struct SwitchMatrixScanResponse<const ROW_COUNT: usize, const COL_COUNT: usize> {
+    result: Result<{ ROW_COUNT }, { COL_COUNT }>,
+}
+
 pub struct BasicVerticalSwitchMatrix<const ROW_COUNT: usize, const COL_COUNT: usize> {
-    pub rows: [Box<dyn InputPin<Error = gpio::Error>>; ROW_COUNT],
-    pub cols: [Box<dyn OutputPin<Error = gpio::Error>>; COL_COUNT],
+    pub rows: [Box<dyn InputPin<Error = gpio::Error> + Sync + Send>; ROW_COUNT],
+    pub cols: [Box<dyn OutputPin<Error = gpio::Error> + Sync + Send>; COL_COUNT],
     previous_result: Result<{ ROW_COUNT }, { COL_COUNT }>,
 }
 
@@ -44,8 +235,8 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize>
     BasicVerticalSwitchMatrix<ROW_COUNT, COL_COUNT>
 {
     pub fn new(
-        rows: [Box<dyn InputPin<Error = gpio::Error>>; ROW_COUNT],
-        cols: [Box<dyn OutputPin<Error = gpio::Error>>; COL_COUNT],
+        rows: [Box<dyn InputPin<Error = gpio::Error> + Sync + Send>; ROW_COUNT],
+        cols: [Box<dyn OutputPin<Error = gpio::Error> + Sync + Send>; COL_COUNT],
     ) -> Self {
         BasicVerticalSwitchMatrix {
             rows,
@@ -55,6 +246,7 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize>
     }
 }
 
+#[async_trait]
 impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, COL_COUNT>
     for BasicVerticalSwitchMatrix<ROW_COUNT, COL_COUNT>
 {
@@ -70,7 +262,7 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, COL_COUN
                 }
             }
             col.set_low().unwrap();
-            halt(1).await;
+            Mono::delay(1.micros()).await;
         }
         result.scan_time_ticks = Mono::now().ticks();
         self.previous_result = result;
@@ -79,8 +271,8 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, COL_COUN
 }
 
 pub struct BasicHorizontalSwitchMatrix<const ROW_COUNT: usize, const COL_COUNT: usize> {
-    pub rows: [Box<dyn OutputPin<Error = gpio::Error>>; ROW_COUNT],
-    pub cols: [Box<dyn InputPin<Error = gpio::Error>>; COL_COUNT],
+    pub rows: [Box<dyn OutputPin<Error = gpio::Error> + Sync + Send>; ROW_COUNT],
+    pub cols: [Box<dyn InputPin<Error = gpio::Error> + Sync + Send>; COL_COUNT],
     previous_result: Result<{ ROW_COUNT }, { COL_COUNT }>,
 }
 
@@ -89,8 +281,8 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize>
     BasicHorizontalSwitchMatrix<ROW_COUNT, COL_COUNT>
 {
     pub fn new(
-        rows: [Box<dyn OutputPin<Error = gpio::Error>>; ROW_COUNT],
-        cols: [Box<dyn InputPin<Error = gpio::Error>>; COL_COUNT],
+        rows: [Box<dyn OutputPin<Error = gpio::Error> + Sync + Send>; ROW_COUNT],
+        cols: [Box<dyn InputPin<Error = gpio::Error> + Sync + Send>; COL_COUNT],
     ) -> Self {
         BasicHorizontalSwitchMatrix {
             rows,
@@ -100,6 +292,7 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize>
     }
 }
 
+#[async_trait]
 impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, COL_COUNT>
     for BasicHorizontalSwitchMatrix<ROW_COUNT, COL_COUNT>
 {
@@ -115,7 +308,7 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Scanner<ROW_COUNT, COL_COUN
                 }
             }
             row.set_low().unwrap();
-            halt(1).await;
+            Mono::delay(1.micros()).await;
         }
         self.previous_result = result;
         result
