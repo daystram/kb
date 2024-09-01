@@ -58,10 +58,7 @@ mod kb {
         matrix::{BasicVerticalSwitchMatrix, Scanner},
         processor::{
             events::rgb::{FrameIterator, RGBMatrix, RGBProcessor},
-            input::{
-                debounce::KeyMatrixRisingFallingDebounceProcessor,
-                flip::{ConcurrentFlipProcessor, Pos},
-            },
+            input::debounce::KeyMatrixRisingFallingDebounceProcessor,
             mapper::{Input, Mapper},
             Event, EventsProcessor, InputProcessor,
         },
@@ -312,10 +309,9 @@ mod kb {
         let input_processors: &mut [&mut dyn InputProcessor<
             { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT },
             { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT },
-        >] = &mut [
-            &mut KeyMatrixRisingFallingDebounceProcessor::new(10.millis()),
-            &mut ConcurrentFlipProcessor::new(Pos { row: 2, col: 1 }, Pos { row: 2, col: 3 }),
-        ];
+        >] = &mut [&mut KeyMatrixRisingFallingDebounceProcessor::new(
+            10.millis(),
+        )];
         let mut mapper = Mapper::new(<Keyboard as KeyboardConfiguration>::get_input_map());
         let events_processors: &mut [&mut dyn EventsProcessor<
             <Keyboard as KeyboardConfiguration>::Layer,
