@@ -1,2 +1,6 @@
 export KEYBOARD=default
 export LAYOUT=default
+
+# VID, PID, and Serial are obtained from `probe-rs list`
+export LEFT_PROBE="vid:pid:serial"
+export RIGHT_PROBE="vid:pid:serial"

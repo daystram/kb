@@ -1,6 +1,16 @@
+[alias]
+run_probe = [
+    "--config",
+    "target.'cfg(all(target_arch = \"arm\", target_os = \"none\"))'.runner = 'probe-rs run --chip RP2040'",
+    "run",
+]
+run_u2f = [
+    "--config",
+    "target.'cfg(all(target_arch = \"arm\", target_os = \"none\"))'.runner = 'elf2uf2-rs -d'",
+    "run",
+]
+
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
-runner = "probe-rs run --chip RP2040"
-# runner = "elf2uf2-rs -d"
 rustflags = [
     "-C",
     "linker=flip-link",
