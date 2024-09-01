@@ -4,6 +4,7 @@
 #![feature(associated_type_defaults)]
 #![feature(trait_alias)]
 #![allow(clippy::type_complexity)]
+mod debug;
 mod heartbeat;
 mod key;
 mod keyboard;
