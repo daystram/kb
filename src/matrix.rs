@@ -29,14 +29,28 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Serialize for Result<ROW_CO
     {
         let mut state = serializer.serialize_struct("Result", 2)?;
         state.serialize_field("scan_time_ticks", &self.scan_time_ticks)?;
-        state.serialize_field(
-            "matrix",
-            &self
-                .matrix
-                .iter()
-                .map(|row| row.to_vec())
-                .collect::<Vec<Vec<Bit>>>(),
-        )?;
+
+        let mut packed_matrix = Vec::with_capacity((ROW_COUNT * COL_COUNT * 3) / 8);
+        let mut bit_accumulator: u32 = 0; // use u32 to avoid overflow
+        let mut bit_count = 0;
+
+        for row in &self.matrix {
+            for bit in row {
+                bit_accumulator = (bit_accumulator << 3) | bit.pack() as u32;
+                bit_count += 3;
+
+                if bit_count >= 8 {
+                    packed_matrix.push((bit_accumulator >> (bit_count - 8)) as u8);
+                    bit_count -= 8;
+                }
+            }
+        }
+
+        if bit_count > 0 {
+            packed_matrix.push((bit_accumulator << (8 - bit_count)) as u8);
+        }
+
+        state.serialize_field("matrix", &packed_matrix)?;
         state.end()
     }
 }
@@ -51,34 +65,44 @@ impl<'de, const ROW_COUNT: usize, const COL_COUNT: usize> Deserialize<'de>
         #[derive(Deserialize)]
         struct ResultOwned {
             scan_time_ticks: u64,
-            matrix: Vec<Vec<Bit>>,
+            matrix: Vec<u8>,
         }
 
         let temp = ResultOwned::deserialize(deserializer)?;
-        if temp.matrix.len() != ROW_COUNT || temp.matrix.iter().any(|row| row.len() != COL_COUNT) {
+        let expected_len = (ROW_COUNT * COL_COUNT * 3 + 7) / 8; // add 7 to round up to next byte
+        if temp.matrix.len() != expected_len {
             return Err(de::Error::custom(
-                "matrix dimensions do not match expectation",
+                "matrix length does not match expected length",
             ));
         }
 
-        let mut result = Result::<ROW_COUNT, COL_COUNT> {
-            scan_time_ticks: temp.scan_time_ticks,
-            ..Default::default()
-        };
-        for (i, row) in temp.matrix.into_iter().enumerate() {
-            for (j, bit) in row.into_iter().enumerate() {
-                result.matrix[i][j] = bit;
+        let mut matrix = [[Bit {
+            edge: Edge::None,
+            pressed: false,
+        }; COL_COUNT]; ROW_COUNT];
+        let mut bit_accumulator: u32 = 0; // use u32 to avoid overflow
+        let mut bit_count = 0;
+        let mut byte_index = 0;
+
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..ROW_COUNT {
+            for j in 0..COL_COUNT {
+                while bit_count < 3 {
+                    bit_accumulator = (bit_accumulator << 8) | temp.matrix[byte_index] as u32;
+                    byte_index += 1;
+                    bit_count += 8;
+                }
+
+                matrix[i][j] = Bit::unpack((bit_accumulator >> (bit_count - 3)) as u8);
+                bit_count -= 3;
             }
         }
 
-        Ok(result)
+        Ok(Result {
+            scan_time_ticks: temp.scan_time_ticks,
+            matrix,
+        })
     }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Format, Serialize)]
-pub struct Bit {
-    pub edge: Edge,
-    pub pressed: bool,
 }
 
 impl<const ROW_COUNT: usize, const COL_COUNT: usize> Default for Result<ROW_COUNT, COL_COUNT> {
@@ -90,6 +114,29 @@ impl<const ROW_COUNT: usize, const COL_COUNT: usize> Default for Result<ROW_COUN
                 pressed: false,
             }; COL_COUNT]; ROW_COUNT],
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Format)]
+pub struct Bit {
+    pub edge: Edge,
+    pub pressed: bool,
+}
+
+impl Bit {
+    fn pack(&self) -> u8 {
+        (self.edge as u8) << 1 | (self.pressed as u8)
+    }
+
+    fn unpack(packed: u8) -> Self {
+        let edge = match packed >> 1 {
+            0 => Edge::None,
+            1 => Edge::Rising,
+            2 => Edge::Falling,
+            _ => Edge::None, // invalid
+        };
+        let pressed = packed & 1 != 0;
+        Bit { edge, pressed }
     }
 }
 
