@@ -26,7 +26,11 @@ mod kb_dev;
 #[cfg(keyboard = "kb_dev")]
 use kb_dev as selected_keyboard;
 
-pub trait KeyboardConfiguration {
+#[cfg(keyboard = "quadax_rift")]
+mod quadax_rift;
+#[cfg(keyboard = "quadax_rift")]
+use quadax_rift as selected_keyboard;
+
 #[derive(Default)]
 pub struct Configuration {
     pub key_matrix: Option<
