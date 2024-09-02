@@ -1,5 +1,4 @@
 use defmt::Format;
-use serde::{Deserialize, Serialize};
 use usbd_human_interface_device::page::Keyboard;
 
 #[allow(dead_code)]
@@ -221,7 +220,7 @@ pub enum Control {
 
 pub trait LayerIndex: Copy + Default + PartialEq + PartialOrd + Format + Into<usize> {}
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Format, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Format, PartialEq)]
 pub enum Edge {
     #[default]
     None,
