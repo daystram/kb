@@ -39,8 +39,8 @@ pub enum Direction {
 }
 
 pub struct RotaryEncoder {
-    pin_a: Box<dyn InputPin<Error = gpio::Error>>,
-    pin_b: Box<dyn InputPin<Error = gpio::Error>>,
+    pin_a: Box<dyn InputPin<Error = gpio::Error> + Sync + Send>,
+    pin_b: Box<dyn InputPin<Error = gpio::Error> + Sync + Send>,
 
     mode: Mode,
     phase_history: u16,
@@ -49,8 +49,8 @@ pub struct RotaryEncoder {
 
 impl RotaryEncoder {
     pub fn new(
-        pin_a: Box<dyn InputPin<Error = gpio::Error>>,
-        pin_b: Box<dyn InputPin<Error = gpio::Error>>,
+        pin_a: Box<dyn InputPin<Error = gpio::Error> + Sync + Send>,
+        pin_b: Box<dyn InputPin<Error = gpio::Error> + Sync + Send>,
         mut pin_c: Box<dyn OutputPin<Error = gpio::Error>>,
         mode: Mode,
     ) -> Self {

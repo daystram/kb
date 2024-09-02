@@ -3,15 +3,26 @@
 #![feature(type_alias_impl_trait)]
 #![feature(associated_type_defaults)]
 #![feature(trait_alias)]
+#![feature(async_closure)]
+#![feature(generic_const_exprs)]
+#![feature(future_join)]
+#![allow(incomplete_features)]
+#![allow(refining_impl_trait)]
 #![allow(clippy::type_complexity)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::await_holding_refcell_ref)]
+mod debug;
 mod heartbeat;
 mod key;
 mod keyboard;
 mod matrix;
 mod processor;
+mod remote;
 mod rotary;
+mod split;
 mod util;
 
+#[macro_use]
 extern crate alloc;
 extern crate rp2040_hal as hal;
 use {defmt_rtt as _, panic_probe as _};
@@ -21,29 +32,31 @@ use {defmt_rtt as _, panic_probe as _};
     dispatchers = [TIMER_IRQ_1, TIMER_IRQ_2, TIMER_IRQ_3]
 )]
 mod kb {
-    use alloc::{boxed::Box, vec::Vec};
-    #[global_allocator]
-    static HEAP: embedded_alloc::Heap = embedded_alloc::Heap::empty();
-
-    use defmt::{debug, info};
-
     // The linker will place this boot block at the start of our program image.
     // We need this to help the ROM bootloader get our code up and running.
     #[link_section = ".boot2"]
     #[used]
     pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
 
+    #[global_allocator]
+    pub static HEAP: embedded_alloc::Heap = embedded_alloc::Heap::empty();
+    const HEAP_SIZE_BYTES: usize = 16384; // 16 KB
+    static mut HEAP_MEM: [core::mem::MaybeUninit<u8>; HEAP_SIZE_BYTES] =
+        [core::mem::MaybeUninit::uninit(); HEAP_SIZE_BYTES];
+
+    use alloc::{boxed::Box, rc::Rc, vec::Vec};
+    use core::cell::RefCell;
     use hal::{
         clocks::init_clocks_and_plls,
         gpio, pac,
         pio::{self, PIOExt},
         pwm, sio, usb, Clock, Sio, Watchdog,
     };
-
     use rtic_monotonics::rp2040::prelude::*;
-    rp2040_timer_monotonic!(Mono);
-
-    use rtic_sync::channel::{Receiver, Sender};
+    use rtic_sync::{
+        arbiter::Arbiter,
+        channel::{Receiver, Sender},
+    };
     use usb_device::{class_prelude::*, prelude::*, UsbError};
     use usbd_human_interface_device::{
         device::keyboard::{NKROBootKeyboard, NKROBootKeyboardConfig},
@@ -52,18 +65,30 @@ mod kb {
     };
 
     use crate::{
+        debug,
         heartbeat::HeartbeatLED,
         key::{Action, Edge, Key},
-        keyboard::{Keyboard, KeyboardConfiguration},
-        matrix::{BasicVerticalSwitchMatrix, Scanner},
+        keyboard::{Configuration, Configurator, Keyboard},
+        matrix::{SplitScanner, SplitSwitchMatrix},
         processor::{
             events::rgb::{FrameIterator, RGBMatrix, RGBProcessor},
             input::debounce::KeyMatrixRisingFallingDebounceProcessor,
             mapper::{Input, Mapper},
             Event, EventsProcessor, InputProcessor,
         },
+        remote::{
+            self,
+            transport::{
+                uart::{UartReceiver, UartSender},
+                Sequence, TransportReceiver,
+            },
+            Server,
+        },
         rotary::RotaryEncoder,
+        split,
     };
+
+    rp2040_timer_monotonic!(Mono);
 
     const XOSC_CRYSTAL_FREQ: u32 = 12_000_000;
 
@@ -77,63 +102,33 @@ mod kb {
     const HID_REPORTER_TARGET_POLL_PERIOD_MICROS: u64 =
         1_000_000u64 / HID_REPORTER_TARGET_POLL_FREQ;
 
-    const DEBUG_LOG_INPUT_SCANNER_ENABLE_TIMING: bool = false;
-    const DEBUG_LOG_INPUT_SCANNER_INTERVAL: u64 = 50;
-    const DEBUG_LOG_PROCESSOR_ENABLE_TIMING: bool = false;
-    const DEBUG_LOG_PROCESSOR_INTERVAL: u64 = 50;
-    const DEBUG_LOG_EVENTS: bool = true;
-    const DEBUG_LOG_SENT_KEYS: bool = false;
-
     #[shared]
     struct Shared {
+        is_usb_connected: bool,
         usb_device: UsbDevice<'static, usb::UsbBus>,
         usb_keyboard: UsbHidClass<
             'static,
             usb::UsbBus,
             frunk::HList!(NKROBootKeyboard<'static, usb::UsbBus>),
         >,
+        transport_sender: Option<Arbiter<Rc<RefCell<UartSender>>>>,
     }
 
     #[local]
     struct Local {
-        key_matrix: Option<
-            BasicVerticalSwitchMatrix<
-                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT },
-                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT },
-            >,
-        >,
-        rotary_encoder: Option<RotaryEncoder>,
-        heartbeat_led: Option<HeartbeatLED>,
-        rgb_matrix: Option<
-            RGBMatrix<
-                { <Keyboard as KeyboardConfiguration>::RGB_MATRIX_LED_COUNT },
-                ws2812_pio::Ws2812Direct<
-                    pac::PIO0,
-                    pio::SM0,
-                    gpio::Pin<gpio::bank0::Gpio28, gpio::FunctionPio0, gpio::PullDown>,
-                >,
-            >,
-        >,
+        transport_receiver: Option<UartReceiver>,
     }
 
     #[init(local = [usb_allocator: Option<UsbBusAllocator<usb::UsbBus>> = None])]
     fn init(mut ctx: init::Context) -> (Shared, Local) {
-        info!("init()");
+        defmt::info!("init()");
 
         // Soft-reset does not release the hardware spinlocks.
         // Release them now to avoid a deadlock after debug or watchdog reset.
-        unsafe {
-            sio::spinlock_reset();
-        }
+        unsafe { sio::spinlock_reset() };
 
         // Initialize global memory allocator
-        {
-            use core::mem::MaybeUninit;
-            const HEAP_COUNT: usize = 2048;
-            static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_COUNT] =
-                [MaybeUninit::uninit(); HEAP_COUNT];
-            unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_COUNT) }
-        }
+        unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE_BYTES) };
 
         // Set the ARM SLEEPONEXIT bit to go to sleep after handling interrupts
         // See https://developer.arm.com/docs/100737/0100/power-management/sleep-mode/sleep-on-exit-bit
@@ -155,13 +150,13 @@ mod kb {
         .unwrap();
 
         // Init channels
-        let (input_sender, input_receiver) = rtic_sync::make_channel!(Input<{<Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT}, {<Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT}>, INPUT_CHANNEL_BUFFER_SIZE);
+        let (input_sender, input_receiver) = rtic_sync::make_channel!(Input<{<Keyboard as Configurator>::KEY_MATRIX_ROW_COUNT}, {<Keyboard as Configurator>::KEY_MATRIX_COL_COUNT}>, INPUT_CHANNEL_BUFFER_SIZE);
         let (keys_sender, keys_receiver) =
             rtic_sync::make_channel!(Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE);
         let (frame_sender, frame_receiver) = rtic_sync::make_channel!(Box<dyn FrameIterator>, 1);
 
         // Init HID device
-        info!("init usb allocator");
+        defmt::info!("init usb allocator");
         let usb_allocator = ctx
             .local
             .usb_allocator
@@ -173,12 +168,12 @@ mod kb {
                 &mut ctx.device.RESETS,
             )));
 
-        info!("init usb keyboard");
+        defmt::info!("init usb keyboard");
         let usb_keyboard = UsbHidClassBuilder::new()
             .add_device(NKROBootKeyboardConfig::default())
             .build(usb_allocator);
 
-        info!("init usb device");
+        defmt::info!("init usb device");
         let usb_device = UsbDeviceBuilder::new(usb_allocator, UsbVidPid(0x1111, 0x1111))
             .strings(&[StringDescriptors::default()
                 .manufacturer("daystram")
@@ -189,7 +184,7 @@ mod kb {
 
         // Init keyboard
         let (pio0, sm0, _, _, _) = ctx.device.PIO0.split(&mut ctx.device.RESETS);
-        let (key_matrix, rotary_encoder, heartbeat_led, rgb_matrix) = Keyboard::init(
+        let (config, transport) = Keyboard::init(
             gpio::Pins::new(
                 ctx.device.IO_BANK0,
                 ctx.device.PADS_BANK0,
@@ -199,71 +194,217 @@ mod kb {
             pwm::Slices::new(ctx.device.PWM, &mut ctx.device.RESETS),
             pio0,
             sm0,
+            ctx.device.UART0,
+            &mut ctx.device.RESETS,
             clocks.peripheral_clock.freq(),
         );
+        assert!(
+            !config.is_split() || transport.is_some(),
+            "keyboard is configured as split but remote transport is not configured"
+        );
 
-        heartbeat::spawn().ok();
-        input_scanner::spawn(input_sender).ok();
-        processor::spawn(input_receiver, keys_sender, frame_sender).ok();
-        rgb_matrix_renderer::spawn(frame_receiver).ok();
-        hid_usb_tick::spawn().ok();
-        hid_reporter::spawn(keys_receiver).ok();
-
-        info!("enable interrupts");
-        unsafe {
-            pac::NVIC::unmask(pac::Interrupt::USBCTRL_IRQ);
+        let (transport_sender, mut transport_receiver) = match transport {
+            Some((transport_sender, transport_receiver)) => {
+                (Some(transport_sender), Some(transport_receiver))
+            }
+            None => (None, None),
         };
 
-        info!("init() done");
+        // Start
+        start_wait_usb::spawn(
+            1.secs(),
+            input_sender,
+            input_receiver,
+            keys_sender,
+            keys_receiver,
+            frame_sender,
+            frame_receiver,
+            transport_receiver
+                .as_mut()
+                .map(|transport_receiver| transport_receiver.initialize_seq_sender()),
+            config,
+        )
+        .ok();
+
+        defmt::info!("init() done");
         (
             Shared {
+                is_usb_connected: false,
                 usb_device,
                 usb_keyboard,
+                transport_sender,
             },
-            Local {
-                key_matrix,
-                rotary_encoder,
-                heartbeat_led,
-                rgb_matrix,
-            },
+            Local { transport_receiver },
         )
     }
 
     #[idle()]
-    fn idle(_ctx: idle::Context) -> ! {
-        info!("idle()");
+    fn idle(_: idle::Context) -> ! {
+        defmt::info!("idle()");
         loop {
             // https://developer.arm.com/documentation/ddi0406/c/Application-Level-Architecture/Instruction-Details/Alphabetical-list-of-instructions/WFI
             rtic::export::wfi()
         }
     }
 
-    #[task (local=[key_matrix, rotary_encoder], priority = 1)]
-    async fn input_scanner(
-        ctx: input_scanner::Context,
+    // ============================= Master and Slave
+    #[task(shared=[is_usb_connected], priority = 1)]
+    async fn start_wait_usb(
+        mut ctx: start_wait_usb::Context,
+        timeout: <Mono as Monotonic>::Duration,
+        input_sender: Sender<
+            'static,
+            Input<
+                { <Keyboard as Configurator>::KEY_MATRIX_ROW_COUNT },
+                { <Keyboard as Configurator>::KEY_MATRIX_COL_COUNT },
+            >,
+            INPUT_CHANNEL_BUFFER_SIZE,
+        >,
+        input_receiver: Receiver<
+            'static,
+            Input<
+                { <Keyboard as Configurator>::KEY_MATRIX_ROW_COUNT },
+                { <Keyboard as Configurator>::KEY_MATRIX_COL_COUNT },
+            >,
+            INPUT_CHANNEL_BUFFER_SIZE,
+        >,
+        keys_sender: Sender<'static, Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE>,
+        keys_receiver: Receiver<'static, Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE>,
+        frame_sender: Sender<'static, Box<dyn FrameIterator>, 1>,
+        frame_receiver: Receiver<'static, Box<dyn FrameIterator>, 1>,
+        seq_sender: Option<Receiver<'static, Sequence, { remote::REQUEST_SEQUENCE_QUEUE_SIZE }>>,
+        config: Configuration,
+    ) {
+        defmt::info!("start_wait_usb()");
+
+        // Start USB tasks
+        hid_usb_tick::spawn().ok();
+        hid_reporter::spawn(keys_receiver).ok();
+        unsafe { hal::pac::NVIC::unmask(hal::pac::Interrupt::USBCTRL_IRQ) }
+
+        Mono::delay(timeout).await;
+
+        split::set_self_mode(ctx.shared.is_usb_connected.lock(|is_usb_connected| {
+            if *is_usb_connected {
+                split::Mode::Master
+            } else {
+                split::Mode::Slave
+            }
+        }));
+        defmt::warn!(
+            "detected as {} {}",
+            split::get_self_mode(),
+            split::get_self_side()
+        );
+
+        match split::get_self_mode() {
+            split::Mode::Master => {
+                heartbeat::spawn(config.heartbeat_led, 500.millis()).ok();
+                master_input_scanner::spawn(
+                    config.key_matrix_split,
+                    config.rotary_encoder,
+                    input_sender,
+                )
+                .ok();
+                master_processor::spawn(input_receiver, keys_sender, frame_sender).ok();
+                rgb_matrix_renderer::spawn(config.rgb_matrix, frame_receiver).ok();
+            }
+            split::Mode::Slave => {
+                assert!(
+                    config.is_split(),
+                    "keyboard is not configured to operate as split"
+                );
+
+                // Initialize server and register services
+                let mut server = Server::new(seq_sender.unwrap());
+                if let Some(key_matrix_split) = config.key_matrix_split {
+                    server.register_service(Box::new(key_matrix_split)).await;
+                }
+
+                heartbeat::spawn(config.heartbeat_led, 2000.millis()).ok();
+                slave_server::spawn(server).ok();
+            }
+        }
+        unsafe { hal::pac::NVIC::unmask(hal::pac::Interrupt::UART0_IRQ) }
+    }
+
+    #[task(priority = 2)]
+    async fn heartbeat(
+        _: heartbeat::Context,
+        mut heartbeat_led: Option<HeartbeatLED>,
+        period: <Mono as Monotonic>::Duration,
+    ) {
+        defmt::info!("heartbeat()");
+        if let Some(ref mut heartbeat_led) = heartbeat_led {
+            heartbeat_led.cycle(period).await
+        };
+    }
+
+    #[task(binds = UART0_IRQ, local = [transport_receiver], priority = 1)]
+    fn receive_uart(ctx: receive_uart::Context) {
+        match ctx.local.transport_receiver {
+            Some(transport_receiver) => {
+                let start_time = Mono::now();
+                transport_receiver.read_into_buffer();
+                let end_time = Mono::now();
+                debug::log_duration(
+                    debug::LogDurationTag::UARTIRQRecieveBuffer,
+                    start_time,
+                    end_time,
+                );
+            }
+            None => {}
+        }
+    }
+    // ============================= Master and Slave
+
+    // ============================= Slave
+    #[task (shared=[&transport_sender], priority = 1)]
+    async fn slave_server(ctx: slave_server::Context, mut server: Server) {
+        defmt::info!("slave_server()");
+        server
+            .listen(ctx.shared.transport_sender.as_ref().unwrap())
+            .await;
+    }
+    // ============================= Slave
+
+    // ============================= Master
+    #[task (shared=[&transport_sender], priority = 1)]
+    async fn master_input_scanner(
+        ctx: master_input_scanner::Context,
+        mut key_matrix_split: Option<
+            SplitSwitchMatrix<
+                { <Keyboard as Configurator>::KEY_MATRIX_ROW_COUNT },
+                { <Keyboard as Configurator>::KEY_MATRIX_COL_COUNT },
+            >,
+        >,
+        mut rotary_encoder: Option<RotaryEncoder>,
         mut input_sender: Sender<
             'static,
             Input<
-                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT },
-                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT },
+                { <Keyboard as Configurator>::KEY_MATRIX_ROW_COUNT },
+                { <Keyboard as Configurator>::KEY_MATRIX_COL_COUNT },
             >,
             INPUT_CHANNEL_BUFFER_SIZE,
         >,
     ) {
-        info!("input_scanner()");
+        defmt::info!("master_input_scanner()");
         let mut poll_end_time = Mono::now();
         let mut n: u64 = 0;
         loop {
             let scan_start_time = Mono::now();
-            let key_matrix_result = match ctx.local.key_matrix {
-                Some(key_matrix) => key_matrix.scan().await,
-                None => Default::default(),
-            };
-            let rotary_encoder_result = match ctx.local.rotary_encoder {
-                Some(rotary_encoder) => rotary_encoder.scan(),
-                None => Default::default(),
-            };
 
+            let transport_sender = ctx.shared.transport_sender.as_ref();
+            let key_matrix_result = match key_matrix_split {
+                Some(ref mut key_matrix_split) => {
+                    key_matrix_split.scan(transport_sender.unwrap()).await
+                }
+                None => Default::default(),
+            };
+            let rotary_encoder_result = match rotary_encoder {
+                Some(ref mut rotary_encoder) => rotary_encoder.scan(),
+                None => Default::default(),
+            };
             input_sender
                 .try_send(Input {
                     key_matrix_result,
@@ -271,9 +412,11 @@ mod kb {
                 })
                 .ok(); // drop data if buffer is full
 
-            if DEBUG_LOG_INPUT_SCANNER_ENABLE_TIMING && n % DEBUG_LOG_INPUT_SCANNER_INTERVAL == 0 {
+            if debug::ENABLE_LOG_INPUT_SCANNER_ENABLE_TIMING
+                && n % debug::LOG_INPUT_SCANNER_SAMPLING_RATE == 0
+            {
                 let scan_end_time = Mono::now();
-                debug!(
+                defmt::debug!(
                     "[{}] input_scanner: {} us\tpoll: {} us\trate: {} Hz\t budget: {} %",
                     n,
                     (scan_end_time - scan_start_time).to_micros(),
@@ -285,6 +428,13 @@ mod kb {
             }
 
             poll_end_time = Mono::now();
+            debug::log_duration(
+                debug::LogDurationTag::ClientInputScan,
+                scan_start_time,
+                poll_end_time,
+            );
+            debug::log_heap();
+
             n = n.wrapping_add(1);
             Mono::delay_until(scan_start_time + INPUT_SCANNER_TARGET_POLL_PERIOD_MICROS.micros())
                 .await;
@@ -292,31 +442,31 @@ mod kb {
     }
 
     #[task(priority = 2)]
-    async fn processor(
-        _: processor::Context,
+    async fn master_processor(
+        _: master_processor::Context,
         mut input_receiver: Receiver<
             'static,
             Input<
-                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT },
-                { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT },
+                { <Keyboard as Configurator>::KEY_MATRIX_ROW_COUNT },
+                { <Keyboard as Configurator>::KEY_MATRIX_COL_COUNT },
             >,
             INPUT_CHANNEL_BUFFER_SIZE,
         >,
         mut keys_sender: Sender<'static, Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE>,
         frame_sender: Sender<'static, Box<dyn FrameIterator>, 1>,
     ) {
-        info!("processor()");
+        defmt::info!("master_processor()");
         let input_processors: &mut [&mut dyn InputProcessor<
-            { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_ROW_COUNT },
-            { <Keyboard as KeyboardConfiguration>::KEY_MATRIX_COL_COUNT },
+            { <Keyboard as Configurator>::KEY_MATRIX_ROW_COUNT },
+            { <Keyboard as Configurator>::KEY_MATRIX_COL_COUNT },
         >] = &mut [&mut KeyMatrixRisingFallingDebounceProcessor::new(
             10.millis(),
         )];
-        let mut mapper = Mapper::new(<Keyboard as KeyboardConfiguration>::get_input_map());
+        let mut mapper = Mapper::new(<Keyboard as Configurator>::get_input_map());
         let events_processors: &mut [&mut dyn EventsProcessor<
-            <Keyboard as KeyboardConfiguration>::Layer,
+            <Keyboard as Configurator>::Layer,
         >] = &mut [&mut RGBProcessor::<
-            { <Keyboard as KeyboardConfiguration>::RGB_MATRIX_LED_COUNT },
+            { <Keyboard as Configurator>::RGB_MATRIX_LED_COUNT },
         >::new(frame_sender)];
 
         let mut poll_end_time = Mono::now();
@@ -331,15 +481,16 @@ mod kb {
                 continue;
             }
 
-            let mut events =
-                Vec::<Event<<Keyboard as KeyboardConfiguration>::Layer>>::with_capacity(10);
+            let mut events = Vec::<Event<<Keyboard as Configurator>::Layer>>::with_capacity(10);
             mapper.map(&input, &mut events);
 
-            if DEBUG_LOG_EVENTS {
+            if debug::ENABLE_LOG_EVENTS {
                 events
                     .iter()
                     .filter(|e| e.edge != Edge::None)
-                    .for_each(|e| debug!("[{}] event: action: {} edge: {}", n, e.action, e.edge));
+                    .for_each(|e| {
+                        defmt::debug!("[{}] event: action: {} edge: {}", n, e.action, e.edge)
+                    });
             }
 
             if events_processors
@@ -362,9 +513,11 @@ mod kb {
                 )
                 .ok(); // drop data if buffer is full
 
-            if DEBUG_LOG_PROCESSOR_ENABLE_TIMING && (n % DEBUG_LOG_PROCESSOR_INTERVAL == 0) {
+            if debug::ENABLE_LOG_PROCESSOR_ENABLE_TIMING
+                && (n % debug::LOG_PROCESSOR_SAMPLING_RATE == 0)
+            {
                 let scan_end_time = Mono::now();
-                debug!(
+                defmt::debug!(
                     "[{}] processor: {} us\tpoll: {} us\trate: {} Hz\t budget: {} %",
                     n,
                     (scan_end_time - process_start_time).to_micros(),
@@ -380,16 +533,37 @@ mod kb {
         }
     }
 
-    #[task(shared=[usb_keyboard], priority = 1)]
+    #[task(priority = 3)]
+    async fn rgb_matrix_renderer(
+        _: rgb_matrix_renderer::Context,
+        mut rgb_matrix: Option<
+            RGBMatrix<
+                { <Keyboard as Configurator>::RGB_MATRIX_LED_COUNT },
+                ws2812_pio::Ws2812Direct<
+                    pac::PIO0,
+                    pio::SM0,
+                    gpio::Pin<gpio::bank0::Gpio28, gpio::FunctionPio0, gpio::PullDown>,
+                >,
+            >,
+        >,
+        frame_receiver: Receiver<'static, Box<dyn FrameIterator>, 1>,
+    ) {
+        defmt::info!("rgb_matrix_renderer()");
+        if let Some(ref mut rgb_matrix) = rgb_matrix {
+            rgb_matrix.render(frame_receiver).await;
+        }
+    }
+
+    #[task(shared=[usb_keyboard], priority = 2)]
     async fn hid_reporter(
         mut ctx: hid_reporter::Context,
         mut keys_receiver: Receiver<'static, Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE>,
     ) {
-        info!("hid_reporter()");
+        defmt::info!("hid_reporter()");
         while let Ok(keys) = keys_receiver.recv().await {
             let start_time = Mono::now();
-            if DEBUG_LOG_SENT_KEYS {
-                debug!("keys: {:?}", keys.as_slice());
+            if debug::ENABLE_LOG_SENT_KEYS {
+                defmt::debug!("keys: {:?}", keys.as_slice());
             }
 
             ctx.shared.usb_keyboard.lock(|k| {
@@ -407,14 +581,15 @@ mod kb {
         }
     }
 
-    #[task(binds = USBCTRL_IRQ, shared = [usb_device, usb_keyboard], priority = 1)]
+    #[task(binds = USBCTRL_IRQ, shared = [usb_device, usb_keyboard, is_usb_connected], priority = 2)]
     fn hid_reader(ctx: hid_reader::Context) {
-        (ctx.shared.usb_device, ctx.shared.usb_keyboard).lock(|usb_device, usb_keyboard| {
+        (ctx.shared.usb_device, ctx.shared.usb_keyboard, ctx.shared.is_usb_connected).lock(|usb_device, usb_keyboard, is_usb_connected| {
             if usb_device.poll(&mut [usb_keyboard]) {
+                *is_usb_connected = true; // usb connection detected
                 match usb_keyboard.device().read_report() {
                     Ok(leds) => {
-                        debug!(
-                            "num_lock: {}\ncaps_lock: {}\nscroll_lock: {}\ncompose: {}\nkana: {}\n",
+                        defmt::debug!(
+                            "\nnum_lock: {}\ncaps_lock: {}\nscroll_lock: {}\ncompose: {}\nkana: {}\n",
                             leds.num_lock,
                             leds.caps_lock,
                             leds.scroll_lock,
@@ -433,10 +608,10 @@ mod kb {
 
     #[task(
         shared = [usb_keyboard],
-        priority = 1,
+        priority = 2,
     )]
     async fn hid_usb_tick(mut ctx: hid_usb_tick::Context) {
-        info!("hid_usb_tick()");
+        defmt::info!("hid_usb_tick()");
         loop {
             ctx.shared.usb_keyboard.lock(|k| match k.tick() {
                 Ok(_) => {}
@@ -448,26 +623,5 @@ mod kb {
             Mono::delay(1.millis()).await;
         }
     }
-
-    #[task(local=[heartbeat_led], priority = 1)]
-    async fn heartbeat(ctx: heartbeat::Context) {
-        info!("heartbeat()");
-        match ctx.local.heartbeat_led {
-            Some(heartbeat_led) => heartbeat_led.cycle().await,
-            None => {}
-        }
-    }
-    #[task(local=[rgb_matrix], priority = 3)]
-    async fn rgb_matrix_renderer(
-        ctx: rgb_matrix_renderer::Context,
-        frame_receiver: Receiver<'static, Box<dyn FrameIterator>, 1>,
-    ) {
-        info!("rgb_matrix_renderer()");
-        match ctx.local.rgb_matrix {
-            Some(rgb_matrix) => {
-                rgb_matrix.render(frame_receiver).await;
-            }
-            None => {}
-        }
-    }
+    // ============================= Master
 }
