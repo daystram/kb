@@ -12,8 +12,6 @@ use crate::{
     rotary::Direction,
 };
 
-pub const LAYER_COUNT: usize = 3;
-
 #[derive(Clone, Copy, Default, Format, PartialEq, PartialOrd)]
 pub enum Layer {
     #[default]

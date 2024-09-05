@@ -6,6 +6,7 @@
 #![feature(async_closure)]
 #![feature(generic_const_exprs)]
 #![feature(future_join)]
+#![feature(variant_count)]
 #![allow(incomplete_features)]
 #![allow(refining_impl_trait)]
 #![allow(clippy::type_complexity)]

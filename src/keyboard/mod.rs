@@ -1,6 +1,5 @@
-use core::cell::RefCell;
-
 use alloc::rc::Rc;
+use core::{cell::RefCell, mem};
 use hal::{fugit::HertzU32, gpio, pac, pio, pwm};
 use rtic_sync::arbiter::Arbiter;
 use ssd1306::prelude::I2CInterface;
@@ -87,8 +86,8 @@ impl Configuration {
 pub trait Configurator {
     const NAME: &str;
 
-    const LAYER_COUNT: usize = selected_keyboard::layout::LAYER_COUNT;
     type Layer: LayerIndex = selected_keyboard::layout::Layer;
+    const LAYER_COUNT: usize = mem::variant_count::<Self::Layer>();
 
     const KEY_MATRIX_ROW_COUNT: usize;
     const KEY_MATRIX_COL_COUNT: usize;
@@ -111,9 +110,9 @@ pub trait Configurator {
     );
 
     fn get_input_map() -> InputMap<
-        { selected_keyboard::layout::LAYER_COUNT },
-        { selected_keyboard::Keyboard::KEY_MATRIX_ROW_COUNT },
-        { selected_keyboard::Keyboard::KEY_MATRIX_COL_COUNT },
+        { <selected_keyboard::Keyboard as Configurator>::LAYER_COUNT },
+        { <selected_keyboard::Keyboard as Configurator>::KEY_MATRIX_ROW_COUNT },
+        { <selected_keyboard::Keyboard as Configurator>::KEY_MATRIX_COL_COUNT },
         selected_keyboard::layout::Layer,
     > {
         selected_keyboard::layout::get_input_map()
