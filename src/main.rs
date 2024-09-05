@@ -7,6 +7,7 @@
 #![feature(generic_const_exprs)]
 #![feature(future_join)]
 #![feature(variant_count)]
+#![feature(stmt_expr_attributes)]
 #![allow(incomplete_features)]
 #![allow(refining_impl_trait)]
 #![allow(unused_macros)]
