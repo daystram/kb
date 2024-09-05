@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use enum_map::EnumMap;
+use enum_map::{EnumArray, EnumMap};
 
 use crate::{
     key::{Action, Edge, LayerIndex},
@@ -18,22 +18,26 @@ pub struct InputMap<
     const LAYER_COUNT: usize,
     const KEY_MATRIX_ROW_COUNT: usize,
     const KEY_MATRIX_COL_COUNT: usize,
-    L: LayerIndex,
+    L: LayerIndex
+        + EnumArray<[[Action<L>; KEY_MATRIX_COL_COUNT]; KEY_MATRIX_ROW_COUNT]>
+        + EnumArray<EnumMap<Direction, Action<L>>>,
 > {
-    key_matrix: [[[Action<L>; KEY_MATRIX_COL_COUNT]; KEY_MATRIX_ROW_COUNT]; LAYER_COUNT],
-    rotary_encoder: [EnumMap<Direction, Action<L>>; LAYER_COUNT],
+    key_matrix: EnumMap<L, [[Action<L>; KEY_MATRIX_COL_COUNT]; KEY_MATRIX_ROW_COUNT]>,
+    rotary_encoder: EnumMap<L, EnumMap<Direction, Action<L>>>,
 }
 
 impl<
         const LAYER_COUNT: usize,
         const KEY_MATRIX_ROW_COUNT: usize,
         const KEY_MATRIX_COL_COUNT: usize,
-        L: LayerIndex,
+        L: LayerIndex
+            + EnumArray<[[Action<L>; KEY_MATRIX_COL_COUNT]; KEY_MATRIX_ROW_COUNT]>
+            + EnumArray<EnumMap<Direction, Action<L>>>,
     > InputMap<LAYER_COUNT, KEY_MATRIX_ROW_COUNT, KEY_MATRIX_COL_COUNT, L>
 {
     pub const fn new(
-        key_matrix: [[[Action<L>; KEY_MATRIX_COL_COUNT]; KEY_MATRIX_ROW_COUNT]; LAYER_COUNT],
-        rotary_encoder: [EnumMap<Direction, Action<L>>; LAYER_COUNT],
+        key_matrix: EnumMap<L, [[Action<L>; KEY_MATRIX_COL_COUNT]; KEY_MATRIX_ROW_COUNT]>,
+        rotary_encoder: EnumMap<L, EnumMap<Direction, Action<L>>>,
     ) -> Self {
         InputMap {
             key_matrix,
@@ -46,7 +50,9 @@ pub struct Mapper<
     const LAYER_COUNT: usize,
     const KEY_MATRIX_ROW_COUNT: usize,
     const KEY_MATRIX_COL_COUNT: usize,
-    L: LayerIndex,
+    L: LayerIndex
+        + EnumArray<[[Action<L>; KEY_MATRIX_COL_COUNT]; KEY_MATRIX_ROW_COUNT]>
+        + EnumArray<EnumMap<Direction, Action<L>>>,
 > {
     previous_key_matrix_result: MatrixResult<KEY_MATRIX_ROW_COUNT, KEY_MATRIX_COL_COUNT>,
     mapping: InputMap<LAYER_COUNT, KEY_MATRIX_ROW_COUNT, KEY_MATRIX_COL_COUNT, L>,
@@ -56,7 +62,9 @@ impl<
         const LAYER_COUNT: usize,
         const KEY_MATRIX_ROW_COUNT: usize,
         const KEY_MATRIX_COL_COUNT: usize,
-        L: LayerIndex,
+        L: LayerIndex
+            + EnumArray<[[Action<L>; KEY_MATRIX_COL_COUNT]; KEY_MATRIX_ROW_COUNT]>
+            + EnumArray<EnumMap<Direction, Action<L>>>,
     > Mapper<LAYER_COUNT, KEY_MATRIX_ROW_COUNT, KEY_MATRIX_COL_COUNT, L>
 {
     pub fn new(
@@ -73,7 +81,9 @@ impl<
         const LAYER_COUNT: usize,
         const KEY_MATRIX_ROW_COUNT: usize,
         const KEY_MATRIX_COL_COUNT: usize,
-        L: LayerIndex,
+        L: LayerIndex
+            + EnumArray<[[Action<L>; KEY_MATRIX_COL_COUNT]; KEY_MATRIX_ROW_COUNT]>
+            + EnumArray<EnumMap<Direction, Action<L>>>,
     > Mapper<LAYER_COUNT, KEY_MATRIX_ROW_COUNT, KEY_MATRIX_COL_COUNT, L>
 {
     pub fn map(
@@ -91,7 +101,7 @@ impl<
             new_layer = false;
             for (i, row) in result.matrix.iter().enumerate() {
                 for (j, bit) in row.iter().enumerate() {
-                    let action = self.mapping.key_matrix[layer.into()][i][j];
+                    let action = self.mapping.key_matrix[layer][i][j];
                     if bit.pressed {
                         if let Action::LayerModifier(l) = action {
                             if layer < l {
@@ -124,7 +134,7 @@ impl<
                 i: 0,
                 j: 0,
                 edge: result.edge,
-                action: self.mapping.rotary_encoder[layer.into()][result.direction],
+                action: self.mapping.rotary_encoder[layer][result.direction],
             });
         }
 
