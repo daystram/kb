@@ -24,6 +24,7 @@ usb-device = "0.3.2"
 usbd-human-interface-device = "0.5.0"
 smart-leds = "0.3.0"
 ws2812-pio = "0.8.0"
+ssd1306 = "0.8.4"
 
 serde = { version = "1.0.204", default-features = false, features = ["derive"] }
 postcard = { version = "1.0.8", features = ["alloc"] }

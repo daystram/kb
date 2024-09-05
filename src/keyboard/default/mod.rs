@@ -24,6 +24,8 @@ const ENABLE_RGB_MATRIX: bool = true;
 pub struct Keyboard {}
 
 impl Configurator for Keyboard {
+    const NAME: &str = "default";
+
     const KEY_MATRIX_ROW_COUNT: usize = 2;
     const KEY_MATRIX_COL_COUNT: usize = 2;
 
@@ -34,9 +36,11 @@ impl Configurator for Keyboard {
         mut slices: pwm::Slices,
         mut pio0: pio::PIO<pac::PIO0>,
         sm0: pio::UninitStateMachine<(pac::PIO0, pio::SM0)>,
+        _i2c1: pac::I2C1,
         _uart0: pac::UART0,
         _resets: &mut pac::RESETS,
         clock_freq: HertzU32,
+        _system_clock: &hal::clocks::SystemClock,
     ) -> (
         Configuration,
         Option<(Arbiter<Rc<RefCell<UartSender>>>, UartReceiver)>,
@@ -94,6 +98,7 @@ impl Configurator for Keyboard {
                 rotary_encoder,
                 heartbeat_led,
                 rgb_matrix,
+                oled_display: None,
             },
             None,
         )

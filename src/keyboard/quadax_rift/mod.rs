@@ -8,26 +8,31 @@ use hal::{
     gpio, pac, pio, pwm, uart,
 };
 use rtic_sync::arbiter::Arbiter;
+use ssd1306::{prelude::*, size::DisplaySize128x32, I2CDisplayInterface, Ssd1306};
 use ws2812_pio::Ws2812Direct;
 
 use crate::{
     heartbeat::HeartbeatLED,
     keyboard::{Configuration, Configurator},
     matrix::{BasicVerticalSwitchMatrix, SplitSwitchMatrix},
+    oled::OLEDDisplay,
     processor::events::rgb::RGBMatrix,
     remote::transport::uart::{UartReceiver, UartSender},
     rotary::{Mode, RotaryEncoder},
-    split::SideDetector,
+    split::{self, SideDetector},
 };
 
 const ENABLE_HEARTBEAT_LED: bool = true;
 const ENABLE_KEY_MATRIX: bool = true;
 const ENABLE_ROTARY_ENCODER: bool = true;
 const ENABLE_RGB_MATRIX: bool = true;
+const ENABLE_OLED_SCREEN: bool = true;
 
 pub struct Keyboard {}
 
 impl Configurator for Keyboard {
+    const NAME: &str = "quadax-rift";
+
     const KEY_MATRIX_ROW_COUNT: usize = 5;
     const KEY_MATRIX_COL_COUNT: usize = 14;
 
@@ -38,13 +43,17 @@ impl Configurator for Keyboard {
         mut slices: pwm::Slices,
         mut pio0: pio::PIO<pac::PIO0>,
         sm0: pio::UninitStateMachine<(pac::PIO0, pio::SM0)>,
+        i2c1: pac::I2C1,
         uart0: pac::UART0,
         resets: &mut pac::RESETS,
         clock_freq: HertzU32,
+        system_clock: &hal::clocks::SystemClock,
     ) -> (
         Configuration,
         Option<(Arbiter<Rc<RefCell<UartSender>>>, UartReceiver)>,
     ) {
+        SideDetector::new(Box::new(pins.gpio2.into_pull_down_input())).detect();
+
         #[rustfmt::skip]
         let key_matrix_split = if ENABLE_KEY_MATRIX {
             Some(SplitSwitchMatrix::new(BasicVerticalSwitchMatrix::new(
@@ -99,6 +108,23 @@ impl Configurator for Keyboard {
             None
         };
 
+        let oled_display = if ENABLE_OLED_SCREEN {
+            let sda_pin: gpio::Pin<_, gpio::FunctionI2C, _> = pins.gpio26.reconfigure();
+            let scl_pin: gpio::Pin<_, gpio::FunctionI2C, _> = pins.gpio27.reconfigure();
+            let i2c = hal::I2C::i2c1(i2c1, sda_pin, scl_pin, 400.kHz(), resets, system_clock);
+
+            Some(OLEDDisplay::new(Ssd1306::new(
+                I2CDisplayInterface::new(i2c),
+                DisplaySize128x32,
+                match split::get_self_side() {
+                    split::Side::Left => DisplayRotation::Rotate180,
+                    split::Side::Right => DisplayRotation::Rotate0,
+                },
+            )))
+        } else {
+            None
+        };
+
         let mut uart_peripheral = uart::UartPeripheral::new(
             uart0,
             (pins.gpio0.into_function(), pins.gpio1.into_function()),
@@ -120,8 +146,6 @@ impl Configurator for Keyboard {
         let uart_sender = Arbiter::new(Rc::new(RefCell::new(UartSender::new(uart_writer))));
         let uart_receiver = UartReceiver::new(uart_reader);
 
-        SideDetector::new(Box::new(pins.gpio2.into_pull_down_input())).detect();
-
         (
             Configuration {
                 key_matrix: None,
@@ -129,6 +153,7 @@ impl Configurator for Keyboard {
                 rotary_encoder,
                 heartbeat_led,
                 rgb_matrix,
+                oled_display,
             },
             Some((uart_sender, uart_receiver)),
         )

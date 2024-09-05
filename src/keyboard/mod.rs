@@ -3,12 +3,14 @@ use core::cell::RefCell;
 use alloc::rc::Rc;
 use hal::{fugit::HertzU32, gpio, pac, pio, pwm};
 use rtic_sync::arbiter::Arbiter;
+use ssd1306::prelude::I2CInterface;
 use ws2812_pio::Ws2812Direct;
 
 use crate::{
     heartbeat::HeartbeatLED,
     key::LayerIndex,
     matrix::{BasicVerticalSwitchMatrix, SplitSwitchMatrix},
+    oled::OLEDDisplay,
     processor::{events::rgb::RGBMatrix, mapper::InputMap},
     remote::transport::uart::{UartReceiver, UartSender},
     rotary::RotaryEncoder,
@@ -58,6 +60,20 @@ pub struct Configuration {
             >,
         >,
     >,
+    // TODO: configurable OLED display pinout
+    pub oled_display: Option<
+        OLEDDisplay<
+            I2CInterface<
+                hal::I2C<
+                    pac::I2C1,
+                    (
+                        gpio::Pin<gpio::bank0::Gpio26, gpio::FunctionI2c, gpio::PullUp>,
+                        gpio::Pin<gpio::bank0::Gpio27, gpio::FunctionI2c, gpio::PullUp>,
+                    ),
+                >,
+            >,
+        >,
+    >,
 }
 
 impl Configuration {
@@ -67,6 +83,8 @@ impl Configuration {
 }
 
 pub trait Configurator {
+    const NAME: &str;
+
     const LAYER_COUNT: usize = selected_keyboard::layout::LAYER_COUNT;
     type Layer: LayerIndex = selected_keyboard::layout::Layer;
 
@@ -80,9 +98,11 @@ pub trait Configurator {
         slices: pwm::Slices,
         pio0: pio::PIO<pac::PIO0>,
         sm0: pio::UninitStateMachine<(pac::PIO0, pio::SM0)>,
+        i2c1: pac::I2C1,
         uart0: pac::UART0,
         resets: &mut pac::RESETS,
         clock_freq: HertzU32,
+        system_clock: &hal::clocks::SystemClock,
     ) -> (
         Configuration,
         Option<(Arbiter<Rc<RefCell<UartSender>>>, UartReceiver)>,
