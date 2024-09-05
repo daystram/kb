@@ -115,6 +115,7 @@ impl Configurator for Keyboard {
                 heartbeat_led,
                 rgb_matrix,
                 oled_display: None,
+                status_led: None,
             },
             None,
         )

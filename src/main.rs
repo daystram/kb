@@ -21,6 +21,7 @@ mod processor;
 mod remote;
 mod rotary;
 mod split;
+mod status;
 mod util;
 
 #[macro_use]
@@ -87,6 +88,7 @@ mod kb {
         },
         rotary::RotaryEncoder,
         split,
+        status::StatusLED,
     };
 
     rp2040_timer_monotonic!(Mono);
@@ -303,6 +305,10 @@ mod kb {
             split::get_self_side()
         );
 
+        if let Some(ref mut status_led) = config.status_led {
+            status_led.set_link(true);
+        }
+
         if let Some(ref mut display) = config.oled_display {
             display.clear();
             display
@@ -322,7 +328,13 @@ mod kb {
                     input_sender,
                 )
                 .ok();
-                master_processor::spawn(input_receiver, keys_sender, frame_sender).ok();
+                master_processor::spawn(
+                    input_receiver,
+                    keys_sender,
+                    frame_sender,
+                    config.status_led,
+                )
+                .ok();
                 rgb_matrix_renderer::spawn(config.rgb_matrix, frame_receiver).ok();
             }
             split::Mode::Slave => {
@@ -470,6 +482,7 @@ mod kb {
         >,
         mut keys_sender: Sender<'static, Vec<Key>, KEYS_CHANNEL_BUFFER_SIZE>,
         frame_sender: Sender<'static, Box<dyn FrameIterator>, 1>,
+        mut status_led: Option<StatusLED>,
     ) {
         defmt::info!("master_processor()");
         let input_processors: &mut [&mut dyn InputProcessor<
@@ -507,6 +520,10 @@ mod kb {
                     .for_each(|e| {
                         defmt::debug!("[{}] event: action: {} edge: {}", n, e.action, e.edge)
                     });
+            }
+
+            if let Some(ref mut status_led) = status_led {
+                status_led.update_activity(!events.is_empty());
             }
 
             if events_processors

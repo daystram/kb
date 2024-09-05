@@ -14,6 +14,7 @@ use crate::{
     processor::{events::rgb::RGBMatrix, mapper::InputMap},
     remote::transport::uart::{UartReceiver, UartSender},
     rotary::RotaryEncoder,
+    status::StatusLED,
 };
 
 pub use selected_keyboard::Keyboard;
@@ -74,6 +75,7 @@ pub struct Configuration {
             >,
         >,
     >,
+    pub status_led: Option<StatusLED>,
 }
 
 impl Configuration {

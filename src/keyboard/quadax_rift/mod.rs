@@ -1,8 +1,7 @@
 pub mod layout;
 
-use core::cell::RefCell;
-
 use alloc::{boxed::Box, rc::Rc};
+use core::cell::RefCell;
 use hal::{
     fugit::{HertzU32, RateExtU32},
     gpio, pac, pio, pwm, uart,
@@ -20,6 +19,7 @@ use crate::{
     remote::transport::uart::{UartReceiver, UartSender},
     rotary::{Mode, RotaryEncoder},
     split::{self, SideDetector},
+    status::StatusLED,
 };
 
 const ENABLE_HEARTBEAT_LED: bool = true;
@@ -27,6 +27,7 @@ const ENABLE_KEY_MATRIX: bool = true;
 const ENABLE_ROTARY_ENCODER: bool = true;
 const ENABLE_RGB_MATRIX: bool = true;
 const ENABLE_OLED_SCREEN: bool = true;
+const ENABLE_STATUS_LED: bool = true;
 
 pub struct Keyboard {}
 
@@ -125,6 +126,15 @@ impl Configurator for Keyboard {
             None
         };
 
+        let status_led = if ENABLE_STATUS_LED {
+            Some(StatusLED::new(
+                Box::new(pins.gpio24.into_push_pull_output()),
+                Box::new(pins.gpio25.into_push_pull_output()),
+            ))
+        } else {
+            None
+        };
+
         let mut uart_peripheral = uart::UartPeripheral::new(
             uart0,
             (pins.gpio0.into_function(), pins.gpio1.into_function()),
@@ -154,6 +164,7 @@ impl Configurator for Keyboard {
                 heartbeat_led,
                 rgb_matrix,
                 oled_display,
+                status_led,
             },
             Some((uart_sender, uart_receiver)),
         )
