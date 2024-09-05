@@ -1,4 +1,5 @@
 use alloc::boxed::Box;
+use core::fmt::Display;
 use defmt::Format;
 use embedded_hal::digital::InputPin;
 use hal::gpio;
@@ -13,6 +14,15 @@ pub enum Side {
 pub enum Mode {
     Master,
     Slave,
+}
+
+impl Display for Mode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Mode::Master => write!(f, "Master"),
+            Mode::Slave => write!(f, "Slave"),
+        }
+    }
 }
 
 pub struct SideDetector {

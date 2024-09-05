@@ -16,6 +16,7 @@ mod heartbeat;
 mod key;
 mod keyboard;
 mod matrix;
+mod oled;
 mod processor;
 mod remote;
 mod rotary;
@@ -45,7 +46,7 @@ mod kb {
         [core::mem::MaybeUninit::uninit(); HEAP_SIZE_BYTES];
 
     use alloc::{boxed::Box, rc::Rc, vec::Vec};
-    use core::cell::RefCell;
+    use core::{cell::RefCell, fmt::Write};
     use hal::{
         clocks::init_clocks_and_plls,
         gpio, pac,
@@ -194,9 +195,11 @@ mod kb {
             pwm::Slices::new(ctx.device.PWM, &mut ctx.device.RESETS),
             pio0,
             sm0,
+            ctx.device.I2C1,
             ctx.device.UART0,
             &mut ctx.device.RESETS,
             clocks.peripheral_clock.freq(),
+            &clocks.system_clock,
         );
         assert!(
             !config.is_split() || transport.is_some(),
@@ -273,9 +276,12 @@ mod kb {
         frame_sender: Sender<'static, Box<dyn FrameIterator>, 1>,
         frame_receiver: Receiver<'static, Box<dyn FrameIterator>, 1>,
         seq_sender: Option<Receiver<'static, Sequence, { remote::REQUEST_SEQUENCE_QUEUE_SIZE }>>,
-        config: Configuration,
+        mut config: Configuration,
     ) {
         defmt::info!("start_wait_usb()");
+        if let Some(ref mut display) = config.oled_display {
+            display.write_str("kb").unwrap();
+        }
 
         // Start USB tasks
         hid_usb_tick::spawn().ok();
@@ -297,6 +303,16 @@ mod kb {
             split::get_self_side()
         );
 
+        if let Some(ref mut display) = config.oled_display {
+            display.clear();
+            display
+                .write_fmt(format_args!(
+                    "{}\n{}",
+                    <Keyboard as Configurator>::NAME,
+                    split::get_self_mode()
+                ))
+                .unwrap();
+        }
         match split::get_self_mode() {
             split::Mode::Master => {
                 heartbeat::spawn(config.heartbeat_led, 500.millis()).ok();
