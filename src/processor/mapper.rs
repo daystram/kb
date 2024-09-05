@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use enum_map::{EnumArray, EnumMap};
 
 use crate::{
-    key::{Action, Edge, LayerIndex},
+    key::{Action, Edge, LayerIndex, Modifier},
     matrix::Result as MatrixResult,
     rotary::{Direction, Result as RotaryResult},
 };
@@ -114,6 +114,30 @@ impl<
                     // push non-idling event
                     #[allow(clippy::nonminimal_bool)]
                     if !(bit.edge == Edge::None && !bit.pressed) {
+                        // resolve modified key modifiers
+                        if let Action::ModifiedKey(mk) = action {
+                            mk.get_modifiers()
+                                .iter()
+                                .filter(|&&m: &&Modifier| m != Default::default())
+                                .for_each(|&m| {
+                                    provisional_events.push(Event {
+                                        time_ticks: result.scan_time_ticks,
+                                        i,
+                                        j,
+                                        edge: bit.edge,
+                                        action: m.into(),
+                                    })
+                                });
+                            provisional_events.push(Event {
+                                time_ticks: result.scan_time_ticks,
+                                i,
+                                j,
+                                edge: bit.edge,
+                                action: mk.get_key().into(),
+                            });
+                            continue;
+                        }
+
                         provisional_events.push(Event {
                             time_ticks: result.scan_time_ticks,
                             i,

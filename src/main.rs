@@ -9,11 +9,13 @@
 #![feature(variant_count)]
 #![allow(incomplete_features)]
 #![allow(refining_impl_trait)]
+#![allow(unused_macros)]
 #![allow(clippy::type_complexity)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::await_holding_refcell_ref)]
 mod debug;
 mod heartbeat;
+#[macro_use]
 mod key;
 mod keyboard;
 mod matrix;

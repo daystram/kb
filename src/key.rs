@@ -1,4 +1,6 @@
+use core::mem;
 use defmt::Format;
+use enum_map::Enum;
 use usbd_human_interface_device::page::Keyboard;
 
 #[allow(dead_code)]
@@ -8,24 +10,14 @@ pub enum Action<L: LayerIndex> {
     Pass,
     None,
     Key(Key),
+    ModifiedKey(ModifiedKey),
     Control(Control),
     LayerModifier(L),
 }
 
-impl<L: LayerIndex> From<Key> for Action<L> {
-    fn from(value: Key) -> Self {
-        Action::Key(value)
-    }
-}
-
-impl<L: LayerIndex> From<L> for Action<L> {
-    fn from(value: L) -> Self {
-        Action::LayerModifier(value)
-    }
-}
-
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Format, PartialEq)]
+#[repr(u16)]
 pub enum Key {
     Escape,
     F1,
@@ -112,6 +104,12 @@ pub enum Key {
     RightArrow,
     VolumeUp,
     VolumeDown,
+}
+
+impl<L: LayerIndex> From<Key> for Action<L> {
+    fn from(from: Key) -> Action<L> {
+        Action::Key(from)
+    }
 }
 
 impl From<Key> for Keyboard {
@@ -206,6 +204,107 @@ impl From<Key> for Keyboard {
     }
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Default, Format, PartialEq)]
+#[repr(u8)]
+pub enum Modifier {
+    #[default]
+    None = 0,
+    LeftShift = 1 << 0,
+    LeftControl = 1 << 1,
+    LeftAlt = 1 << 2,
+    LeftGUI = 1 << 3,
+    RightShift = 1 << 4,
+    RightControl = 1 << 5,
+    RightAlt = 1 << 6,
+    RightGUI = 1 << 7,
+}
+
+impl<L: LayerIndex> From<Modifier> for Action<L> {
+    fn from(from: Modifier) -> Self {
+        match from {
+            Modifier::LeftControl => Action::Key(Key::LeftControl),
+            Modifier::LeftShift => Action::Key(Key::LeftShift),
+            Modifier::LeftAlt => Action::Key(Key::LeftAlt),
+            Modifier::LeftGUI => Action::Key(Key::LeftGUI),
+            Modifier::RightControl => Action::Key(Key::RightControl),
+            Modifier::RightShift => Action::Key(Key::RightShift),
+            Modifier::RightAlt => Action::Key(Key::RightAlt),
+            Modifier::RightGUI => Action::Key(Key::RightGUI),
+            _ => Action::None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Format)]
+pub struct ModifiedKey(pub u16);
+
+impl ModifiedKey {
+    pub fn get_modifiers(self) -> [Modifier; 8] {
+        let mut mods = [Default::default(); 8];
+        let modifier_bits = self.0 >> 8;
+        mods.iter_mut().enumerate().for_each(|(i, m)| {
+            let mask = 1 << i;
+            if (modifier_bits & mask) != 0 {
+                *m = unsafe { mem::transmute::<u8, Modifier>(mask as u8) };
+            }
+        });
+        mods
+    }
+
+    pub fn get_key(self) -> Key {
+        unsafe { mem::transmute(self.0 & 0x00FF) }
+    }
+}
+
+macro_rules! LS {
+    ($key:expr) => {
+        ModifiedKey($key as u16 | (Modifier::LeftShift as u16) << 8)
+    };
+}
+
+macro_rules! LC {
+    ($key:expr) => {
+        ModifiedKey($key as u16 | (Modifier::LeftControl as u16) << 8)
+    };
+}
+
+macro_rules! LA {
+    ($key:expr) => {
+        ModifiedKey($key as u16 | (Modifier::LeftAlt as u16) << 8)
+    };
+}
+
+macro_rules! LG {
+    ($key:expr) => {
+        ModifiedKey($key as u16 | (Modifier::LeftGUI as u16) << 8)
+    };
+}
+
+macro_rules! RS {
+    ($key:expr) => {
+        ModifiedKey($key as u16 | (Modifier::RightShift as u16) << 8)
+    };
+}
+
+macro_rules! RC {
+    ($key:expr) => {
+        ModifiedKey($key as u16 | (Modifier::RightControl as u16) << 8)
+    };
+}
+
+macro_rules! RA {
+    ($key:expr) => {
+        ModifiedKey($key as u16 | (Modifier::RightAlt as u16) << 8)
+    };
+}
+
+macro_rules! RG {
+    ($key:expr) => {
+        ModifiedKey($key as u16 | (Modifier::RightGUI as u16) << 8)
+    };
+}
+
 #[allow(dead_code, clippy::enum_variant_names)]
 #[derive(Clone, Copy, Debug, Format, PartialEq)]
 pub enum Control {
@@ -218,7 +317,7 @@ pub enum Control {
     RGBDirectionToggle,
 }
 
-pub trait LayerIndex: Copy + Default + PartialEq + PartialOrd + Format + Into<usize> {}
+pub trait LayerIndex: Copy + Default + PartialEq + PartialOrd + Enum + Format {}
 
 #[derive(Clone, Copy, Debug, Default, Format, PartialEq)]
 pub enum Edge {
