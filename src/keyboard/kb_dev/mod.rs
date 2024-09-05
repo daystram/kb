@@ -24,7 +24,7 @@ const ENABLE_RGB_MATRIX: bool = true;
 pub struct Keyboard {}
 
 impl Configurator for Keyboard {
-    const NAME: &str = "kb_dev";
+    const NAME: &str = "kb-dev";
 
     const KEY_MATRIX_ROW_COUNT: usize = 5;
     const KEY_MATRIX_COL_COUNT: usize = 15;
