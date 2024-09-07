@@ -130,6 +130,7 @@ impl Configurator for Keyboard {
             Some(StatusLED::new(
                 Box::new(pins.gpio24.into_push_pull_output()),
                 Box::new(pins.gpio25.into_push_pull_output()),
+                29,
             ))
         } else {
             None

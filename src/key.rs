@@ -308,6 +308,7 @@ macro_rules! RG {
 #[allow(dead_code, clippy::enum_variant_names)]
 #[derive(Clone, Copy, Debug, Format, PartialEq)]
 pub enum Control {
+    U2FBootloaderJump,
     RGBAnimationNext,
     RGBAnimationPrevious,
     RGBSpeedUp,
