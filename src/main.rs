@@ -77,7 +77,10 @@ mod kb {
         keyboard::{Configuration, Configurator, Keyboard},
         matrix::{SplitScanner, SplitSwitchMatrix},
         processor::{
-            events::rgb::{FrameIterator, RGBMatrix, RGBProcessor},
+            events::{
+                rgb::{FrameIterator, RGBMatrix, RGBProcessor},
+                system::SystemProcessor,
+            },
             input::debounce::KeyMatrixRisingFallingDebounceProcessor,
             mapper::{Input, Mapper},
             Event, EventsProcessor, InputProcessor,
@@ -310,7 +313,7 @@ mod kb {
         );
 
         if let Some(ref mut status_led) = config.status_led {
-            status_led.set_link(true);
+            status_led.set_remote_link(true);
         }
 
         if let Some(ref mut display) = config.oled_display {
@@ -498,9 +501,12 @@ mod kb {
         let mut mapper = Mapper::new(<Keyboard as Configurator>::get_input_map());
         let events_processors: &mut [&mut dyn EventsProcessor<
             <Keyboard as Configurator>::Layer,
-        >] = &mut [&mut RGBProcessor::<
-            { <Keyboard as Configurator>::RGB_MATRIX_LED_COUNT },
-        >::new(frame_sender)];
+        >] = &mut [
+            &mut RGBProcessor::<{ <Keyboard as Configurator>::RGB_MATRIX_LED_COUNT }>::new(
+                frame_sender,
+            ),
+            &mut SystemProcessor::new(29),
+        ];
 
         let mut poll_end_time = Mono::now();
         let mut n: u64 = 0;
@@ -527,7 +533,7 @@ mod kb {
             }
 
             if let Some(ref mut status_led) = status_led {
-                status_led.update_activity(!events.is_empty());
+                status_led.update_remote_activity(!events.is_empty());
             }
 
             if events_processors
