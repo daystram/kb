@@ -1,6 +1,5 @@
-#![allow(dead_code)]
 use defmt::Format;
-use enum_map::enum_map;
+use enum_map::{enum_map, Enum};
 
 use crate::{
     key::{
@@ -12,9 +11,7 @@ use crate::{
     rotary::Direction,
 };
 
-pub const LAYER_COUNT: usize = 2;
-
-#[derive(Clone, Copy, Default, Format, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Default, Enum, Format, PartialEq, PartialOrd)]
 pub enum Layer {
     #[default]
     Base,
@@ -23,36 +20,35 @@ pub enum Layer {
 
 impl LayerIndex for Layer {}
 
-impl From<Layer> for usize {
-    fn from(value: Layer) -> usize {
-        value as usize
-    }
-}
-
-#[rustfmt::skip]
-pub fn get_input_map() -> InputMap<{ <super::super::Keyboard as Configurator>::LAYER_COUNT }, { <super::super::Keyboard as Configurator>::KEY_MATRIX_ROW_COUNT }, { <super::super::Keyboard as Configurator>::KEY_MATRIX_COL_COUNT }, <super::super::Keyboard as Configurator>::Layer> {
+pub fn get_input_map() -> InputMap<
+    { <super::super::Keyboard as Configurator>::LAYER_COUNT },
+    { <super::super::Keyboard as Configurator>::KEY_MATRIX_ROW_COUNT },
+    { <super::super::Keyboard as Configurator>::KEY_MATRIX_COL_COUNT },
+    <super::super::Keyboard as Configurator>::Layer,
+> {
+    #[rustfmt::skip]
     InputMap::new(
-        [
-            [
+        enum_map! {
+            Layer::Base => [
                 [K(Key::A),                    K(Key::B)],
                 [___________,                  LM(Layer::Function1)],
             ],
-            [
+            Layer::Function1 => [
                 [K(Key::C),                    K(Key::D)],
                 [C(Control::RGBAnimationNext), ___________],
             ],
-        ],
-        [
-            enum_map! {
+        },
+        enum_map! {
+            Layer::Base => enum_map! {
                 Direction::Clockwise => C(Control::RGBBrightnessUp),
                 Direction::CounterClockwise => C(Control::RGBBrightnessDown),
                 _ => ___________,
             },
-            enum_map! {
+            Layer::Function1 => enum_map! {
                 Direction::Clockwise => C(Control::RGBSpeedUp),
                 Direction::CounterClockwise => C(Control::RGBSpeedDown),
                 _ => ___________,
             },
-        ],
+        },
     )
 }

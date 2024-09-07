@@ -6,13 +6,17 @@
 #![feature(async_closure)]
 #![feature(generic_const_exprs)]
 #![feature(future_join)]
+#![feature(variant_count)]
+#![feature(stmt_expr_attributes)]
 #![allow(incomplete_features)]
 #![allow(refining_impl_trait)]
+#![allow(unused_macros)]
 #![allow(clippy::type_complexity)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::await_holding_refcell_ref)]
 mod debug;
 mod heartbeat;
+#[macro_use]
 mod key;
 mod keyboard;
 mod matrix;
